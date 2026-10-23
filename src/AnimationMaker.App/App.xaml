@@ -1,0 +1,13 @@
+<Application x:Class="AnimationMaker.App.App" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries><XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" /></ResourceDictionary.MergedDictionaries>
+      <SolidColorBrush x:Key="AccentBrush" Color="#B2F769"/>
+      <SolidColorBrush x:Key="PanelBrush" Color="#151B25"/>
+      <SolidColorBrush x:Key="StrokeBrush" Color="#293241"/>
+      <SolidColorBrush x:Key="MutedBrush" Color="#91A0B7"/>
+      <Style TargetType="Button"><Setter Property="CornerRadius" Value="7"/><Setter Property="Padding" Value="12,8"/></Style>
+      <Style TargetType="NumberBox"><Setter Property="SpinButtonPlacementMode" Value="Compact"/><Setter Property="Minimum" Value="0"/></Style>
+    </ResourceDictionary>
+  </Application.Resources>
+</Application>

@@ -1,0 +1,32 @@
+name: Build and test
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: runtime/pixi-delta/package-lock.json
+      - name: Bootstrap development tools
+        shell: pwsh
+        run: ./tools/bootstrap.ps1
+      - name: Test core and GPU pipeline
+        shell: pwsh
+        run: ./tools/test.ps1
+      - name: Build portable and runtime packages
+        shell: pwsh
+        run: ./tools/publish.ps1 -SkipTests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable-and-pixi-runtime
+          path: artifacts/releases/
