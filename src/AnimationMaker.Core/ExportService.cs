@@ -4,22 +4,47 @@ namespace AnimationMaker.Core;
 
 public sealed class ExportService(Ffmpeg ffmpeg, Func<IFrameProcessor> processorFactory)
 {
-    public Task<DeltaReport> ExportDeltaAtlasAsync(ProjectDocument project, VideoInfo info, string destination,
-        IProgress<ExportProgress>? progress = null, CancellationToken ct = default, string? runtimeDirectory = null) =>
-        DeltaAtlasExporter.ExportAsync(ProcessFramesAsync(project, info, ct), destination, project.Export, project.Fps,
-            progress, FrameGeometry.FrameCount(project.TrimStart, project.TrimEnd, project.Fps), ct, runtimeDirectory);
+    public async Task<DeltaReport> ExportDeltaAtlasAsync(ProjectDocument project, VideoInfo info, string destination,
+        IProgress<ExportProgress>? progress = null, CancellationToken ct = default, string? runtimeDirectory = null)
+    {
+        ct.ThrowIfCancellationRequested(); project.Validate();
+        var profiler = new ExportProfiler(); IFrameProcessor processor;
+        using (profiler.Measure("processor_initialization")) processor = processorFactory();
+        using (processor)
+        {
+            if (processor is IProfiledFrameProcessor profiled) profiled.Profiler = profiler;
+            int expected = FrameGeometry.FrameCount(project.TrimStart, project.TrimEnd, project.Fps);
+            using var analyzer = new AdaptiveDeltaAnalyzer(project.Export.DeltaAnalysisBackend,
+                processor is IDeltaAnalyzerProvider provider ? () => provider.CreateDeltaAnalyzer(profiler) : null, profiler, expected,
+                status => progress?.Report(new(status, 0, expected)));
+            return await DeltaAtlasExporter.ExportAsync(ProcessFramesCoreAsync(project, info, processor, profiler, ct), destination, project.Export,
+                project.Fps, progress, expected, ct, runtimeDirectory, analyzer, profiler);
+        }
+    }
     public async IAsyncEnumerable<RgbaFrame> ProcessFramesAsync(ProjectDocument project, VideoInfo info, [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        using var processor = processorFactory();
+        await foreach (var frame in ProcessFramesCoreAsync(project, info, processor, null, ct)) yield return frame;
+    }
+    private async IAsyncEnumerable<RgbaFrame> ProcessFramesCoreAsync(ProjectDocument project, VideoInfo info, IFrameProcessor processor,
+        ExportProfiler? profiler, [EnumeratorCancellation] CancellationToken ct)
     {
         project.Validate();
         if (project.TrimEnd > info.Duration + .001) throw new InvalidDataException("Out point exceeds the source duration.");
         var crop = FrameGeometry.ValidateCrop(project.Crop, info.Width, info.Height);
         var size = project.OutputSize(info);
-        using var processor = processorFactory();
         int index = 0;
-        await foreach (var source in ffmpeg.DecodeAsync(project.SourcePath, info, project.TrimStart, project.TrimEnd, project.Fps, 16384, true, ct))
+        await using var decoder = ffmpeg.DecodeAsync(project.SourcePath, info, project.TrimStart, project.TrimEnd, project.Fps, 16384, true, ct).GetAsyncEnumerator(ct);
+        while (true)
         {
+            bool moved;
+            using (profiler?.Measure("decode_wait")) moved = await decoder.MoveNextAsync();
+            if (!moved) break;
             ct.ThrowIfCancellationRequested();
-            yield return processor.Process(source, project.Keyer, project.Masks, project.TrimStart + index++ / project.Fps, crop, size);
+            RgbaFrame frame;
+            using (profiler?.Measure("frame_processing_inclusive"))
+                frame = processor.Process(decoder.Current, project.Keyer, project.Masks, project.TrimStart + index++ / project.Fps, crop, size);
+            yield return frame;
         }
     }
     public Task ExportAtlasAsync(ProjectDocument project, VideoInfo info, string destination, IProgress<ExportProgress>? progress = null, CancellationToken ct = default) =>

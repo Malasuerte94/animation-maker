@@ -41,9 +41,12 @@ public static class Imaging
         => File.WriteAllBytes(path, EncodePng(frame));
 
     public static void SaveAtlasImage(string path, RgbaFrame frame, ExportSettings settings)
+        => File.WriteAllBytes(path, EncodeAtlasImage(frame, settings));
+
+    public static byte[] EncodeAtlasImage(RgbaFrame frame, ExportSettings settings)
     {
         settings.ValidateImageEncoding();
-        File.WriteAllBytes(path, settings.ImageFormat == AtlasImageFormat.Webp ? EncodeWebp(frame, settings.WebpQuality) : EncodePng(frame));
+        return settings.ImageFormat == AtlasImageFormat.Webp ? EncodeWebp(frame, settings.WebpQuality) : EncodePng(frame);
     }
 
     public static byte[] EncodeWebp(RgbaFrame frame, int quality)

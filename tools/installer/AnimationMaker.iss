@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.0-beta.1"
+  #define AppVersion "0.1.0-beta.2"
 #endif
 #ifndef AppSource
   #error AppSource must point to the published portable folder
@@ -12,7 +12,7 @@
 AppId={{58B579D7-92D1-4EF2-8266-868070DE4E09}
 AppName=Animation Maker
 AppVersion={#AppVersion}
-VersionInfoVersion=0.1.0.1
+VersionInfoVersion=0.1.0.2
 AppVerName=Animation Maker {#AppVersion}
 AppPublisher=Animation Maker contributors
 AppPublisherURL=https://github.com/Malasuerte94/animation-maker

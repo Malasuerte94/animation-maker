@@ -8,9 +8,11 @@ public sealed record AnimationFrame(string Name, string Atlas, double DurationMs
 public sealed record AnimationManifest(int Version, double Fps, int Width, int Height, List<AnimationFrame> Frames);
 internal sealed record SpriteRecord(string Name, string File, RectI Bounds, SizeI SourceSize, string Hash);
 internal sealed record PlacedSprite(SpriteRecord Sprite, RectI Slot);
-internal sealed class AtlasPage(int limit)
+internal sealed class AtlasPage
 {
-    private readonly List<RectI> _free = [new(0, 0, limit, limit)];
+    private readonly List<RectI> _free;
+    public AtlasPage(int limit) : this(limit, limit) { }
+    public AtlasPage(int width, int height) => _free = [new(0, 0, width, height)];
     public List<PlacedSprite> Sprites { get; } = [];
     public int Width { get; private set; }
     public int Height { get; private set; }
@@ -66,7 +68,7 @@ public static class AtlasExporter
         for (int y = 0; y < bounds.Height; y++) Buffer.BlockCopy(source.Pixels, ((bounds.Y + y) * source.Width + bounds.X) * 4, pixels, y * bounds.Width * 4, bounds.Width * 4);
         return new(bounds.Width, bounds.Height, pixels);
     }
-    public static async Task ExportAsync(IAsyncEnumerable<RgbaFrame> frames, string destination, ExportSettings settings, double fps, IProgress<ExportProgress>? progress = null, int expectedFrames = 0, CancellationToken ct = default, Action<long>? stagedBytesChanged = null)
+    public static async Task ExportAsync(IAsyncEnumerable<RgbaFrame> frames, string destination, ExportSettings settings, double fps, IProgress<ExportProgress>? progress = null, int expectedFrames = 0, CancellationToken ct = default, Action<long>? stagedBytesChanged = null, ExportProfiler? profiler = null)
     {
         settings.ValidateImageEncoding();
         destination = Path.GetFullPath(destination);
@@ -85,7 +87,12 @@ public static class AtlasExporter
                 string hash = $"{cut.Width}x{cut.Height}-" + Convert.ToHexString(SHA256.HashData(cut.Pixels));
                 bool reuse = settings.Deduplicate && settings.Layout == AtlasLayout.Packed;
                 var file = Path.Combine(cache, reuse ? hash + ".png" : frameIndex + ".png");
-                if (!File.Exists(file)) { Imaging.SavePng(file, cut); spoolBytes += new FileInfo(file).Length; stagedBytesChanged?.Invoke(spoolBytes); }
+                if (!File.Exists(file))
+                {
+                    using (profiler?.Measure("baseline_png_encode_and_write")) Imaging.SavePng(file, cut);
+                    profiler?.Count("baseline_png_encodes");
+                    spoolBytes += new FileInfo(file).Length; stagedBytesChanged?.Invoke(spoolBytes);
+                }
                 if (spoolBytes > 8L * 1024 * 1024 * 1024) throw new IOException("The frame cache exceeds 8 GB. Export a shorter interval or lower the frame height.");
                 sprites.Add(new($"frame_{frameIndex:D6}", file, bounds, new(frame.Width, frame.Height), reuse ? hash : frameIndex.ToString()));
                 frameIndex++; progress?.Report(new("Processing frames", frameIndex, expectedFrames));
@@ -95,26 +102,23 @@ public static class AtlasExporter
             if (expectedFrames > 0 && sprites.Count != expectedFrames) throw new InvalidDataException($"Decoded {sprites.Count} of {expectedFrames} expected frames. Check the selected interval or source file.");
             int margin = settings.Padding + settings.Extrusion;
             var unique = sprites.DistinctBy(s => s.Hash).ToList();
-            var pages = new List<AtlasPage>();
+            List<AtlasPage> pages;
+            using (profiler?.Measure("baseline_packing")) pages = settings.Layout == AtlasLayout.Packed
+                ? AtlasPacker.Pack(unique, settings.MaxAtlasSize, margin, ct, profiler: profiler) : new List<AtlasPage>();
             var locations = new Dictionary<string, (int Page, RectI Rect)>();
-            foreach (var sprite in unique.OrderByDescending(s => Math.Max(s.Bounds.Width, s.Bounds.Height)).ThenByDescending(s => s.Bounds.Width * s.Bounds.Height))
+            if (settings.Layout == AtlasLayout.Packed)
+                for (int p = 0; p < pages.Count; p++)
+                    foreach (var placed in pages[p].Sprites)
+                        locations[placed.Sprite.Hash] = (p, new(placed.Slot.X + margin, placed.Slot.Y + margin, placed.Sprite.Bounds.Width, placed.Sprite.Bounds.Height));
+            foreach (var sprite in settings.Layout == AtlasLayout.Grid ? unique : [])
             {
                 ct.ThrowIfCancellationRequested();
                 int w = sprite.Bounds.Width + margin * 2, h = sprite.Bounds.Height + margin * 2;
                 if (w > settings.MaxAtlasSize || h > settings.MaxAtlasSize) throw new InvalidDataException("A frame exceeds the atlas size. Lower frame height or increase atlas size.");
-                int index;
-                if (settings.Layout == AtlasLayout.Grid)
-                {
-                    int cols = settings.MaxAtlasSize / w, rows = settings.MaxAtlasSize / h;
-                    int item = locations.Count, capacity = cols * rows; index = item / capacity;
-                    if (index == pages.Count) pages.Add(new(settings.MaxAtlasSize));
-                    int slotIndex = item % capacity; pages[index].PlaceFixed(sprite, new(slotIndex % cols * w, slotIndex / cols * h, w, h));
-                }
-                else
-                {
-                    index = pages.FindIndex(page => page.TryPlace(sprite, w, h));
-                    if (index < 0) { var page = new AtlasPage(settings.MaxAtlasSize); page.TryPlace(sprite, w, h); pages.Add(page); index = pages.Count - 1; }
-                }
+                int cols = settings.MaxAtlasSize / w, rows = settings.MaxAtlasSize / h;
+                int item = locations.Count, capacity = cols * rows, index = item / capacity;
+                if (index == pages.Count) pages.Add(new(settings.MaxAtlasSize));
+                int slotIndex = item % capacity; pages[index].PlaceFixed(sprite, new(slotIndex % cols * w, slotIndex / cols * h, w, h));
                 var slot = pages[index].Sprites[^1].Slot;
                 locations[sprite.Hash] = (index, new(slot.X + margin, slot.Y + margin, sprite.Bounds.Width, sprite.Bounds.Height));
             }
@@ -134,7 +138,7 @@ public static class AtlasExporter
                 }
                 string pageName = $"atlas-{pageIndex:D3}";
                 string imageName = pageName + settings.ImageExtension;
-                Imaging.SaveAtlasImage(Path.Combine(staging, imageName), image, settings);
+                using (profiler?.Measure("baseline_atlas_encode_and_write")) Imaging.SaveAtlasImage(Path.Combine(staging, imageName), image, settings);
                 spoolBytes += new FileInfo(Path.Combine(staging, imageName)).Length;
                 stagedBytesChanged?.Invoke(spoolBytes);
                 if (spoolBytes > 8L * 1024 * 1024 * 1024) throw new IOException("The atlas staging exceeds 8 GiB. Export a shorter interval or lower frame height.");
@@ -160,7 +164,8 @@ public static class AtlasExporter
         finally { await StagingFiles.DeleteDirectoryAsync(staging); }
     }
     private static object RectWire(RectI r) => new { x = r.X, y = r.Y, w = r.Width, h = r.Height };
-    private static Task WriteJsonAsync(string path, object value, CancellationToken ct) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, ProjectStore.JsonOptions), ct);
+    private static readonly JsonSerializerOptions CompactJson = new(ProjectStore.JsonOptions) { WriteIndented = false };
+    private static Task WriteJsonAsync(string path, object value, CancellationToken ct) => File.WriteAllTextAsync(path, JsonSerializer.Serialize(value, CompactJson), ct);
 }
 
 internal static class StagingFiles

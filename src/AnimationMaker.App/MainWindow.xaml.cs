@@ -277,7 +277,7 @@ public sealed partial class MainWindow : Window
             var keyer = _project.Keyer with { Enabled = KeyEnabled.IsOn, Mode = (KeyerMode)Math.Max(0, KeyMode.SelectedIndex), ScreenColor = ScreenColor.Text.Trim(), Similarity = (float)Similarity.Value, Softness = (float)Softness.Value, ClipBlack = (float)BlackClip.Value, ClipWhite = (float)WhiteClip.Value, Despill = (float)Despill.Value, RedWeight = (float)Valid(RedWeight, .5), BlueWeight = (float)Valid(BlueWeight, .5), Choke = (float)Valid(Choke, 0), Feather = (float)Valid(Feather, 0) };
             RectI? crop = CropEnabled.IsChecked == true ? new((int)Valid(CropX, 0), (int)Valid(CropY, 0), (int)Valid(CropWidth, _info.Width), (int)Valid(CropHeight, _info.Height)) : null;
             FrameGeometry.ValidateCrop(crop, _info.Width, _info.Height);
-            var project = _project with { Keyer = keyer, Fps = Valid(FpsInput, _project.Fps), Crop = crop, Export = _project.Export with { MaxFrameHeight = (int)Valid(HeightInput, 512), MaxAtlasSize = AtlasSizeChoice.SelectedIndex switch { 0 => 2048, 2 => 8192, _ => 4096 }, Layout = (AtlasLayout)Math.Max(0, AtlasLayoutChoice.SelectedIndex), ImageFormat = (AtlasImageFormat)Math.Max(0, AtlasFormatChoice.SelectedIndex), WebpQuality = (int)Math.Round(Valid(WebpQualityInput, 75)), Deduplicate = Deduplicate.IsChecked == true, VideoQuality = (VideoQuality)Math.Max(0, VideoQualityChoice.SelectedIndex), IncludeAudio = IncludeAudio.IsChecked == true, DeltaTolerance = (int)Math.Round(Valid(DeltaToleranceInput, 8)) } };
+            var project = _project with { Keyer = keyer, Fps = Valid(FpsInput, _project.Fps), Crop = crop, Export = _project.Export with { MaxFrameHeight = (int)Valid(HeightInput, 512), MaxAtlasSize = AtlasSizeChoice.SelectedIndex switch { 0 => 2048, 2 => 8192, _ => 4096 }, Layout = (AtlasLayout)Math.Max(0, AtlasLayoutChoice.SelectedIndex), ImageFormat = (AtlasImageFormat)Math.Max(0, AtlasFormatChoice.SelectedIndex), WebpQuality = (int)Math.Round(Valid(WebpQualityInput, 75)), Deduplicate = Deduplicate.IsChecked == true, VideoQuality = (VideoQuality)Math.Max(0, VideoQualityChoice.SelectedIndex), IncludeAudio = IncludeAudio.IsChecked == true, DeltaTolerance = (int)Math.Round(Valid(DeltaToleranceInput, 8)), DeltaAnalysisBackend = (DeltaAnalysisBackend)Math.Max(0, DeltaAnalysisChoice.SelectedIndex) } };
             project.Validate(); Commit(project, false); return true;
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException or OverflowException) { StatusLabel.Text = ex.Message; return false; }
@@ -302,7 +302,8 @@ public sealed partial class MainWindow : Window
             var crop = _project.Crop ?? new(0, 0, _info.Width, _info.Height); CropX.Value = crop.X; CropY.Value = crop.Y; CropWidth.Value = crop.Width; CropHeight.Value = crop.Height;
             AtlasLayoutChoice.SelectedIndex = (int)e.Layout; AtlasSizeChoice.SelectedIndex = e.MaxAtlasSize switch { 2048 => 0, 8192 => 2, _ => 1 };
             AtlasFormatChoice.SelectedIndex = (int)e.ImageFormat; WebpQualityInput.Value = e.WebpQuality;
-            DeltaToleranceInput.Value = e.DeltaTolerance; Deduplicate.IsChecked = e.Deduplicate; VideoQualityChoice.SelectedIndex = (int)e.VideoQuality; IncludeAudio.IsChecked = e.IncludeAudio; IncludeAudio.IsEnabled = _info.HasAudio;
+            DeltaToleranceInput.Value = e.DeltaTolerance; DeltaAnalysisChoice.SelectedIndex = (int)e.DeltaAnalysisBackend;
+            Deduplicate.IsChecked = e.Deduplicate; VideoQualityChoice.SelectedIndex = (int)e.VideoQuality; IncludeAudio.IsChecked = e.IncludeAudio; IncludeAudio.IsEnabled = _info.HasAudio;
             int selected = MaskList.SelectedIndex; MaskList.ItemsSource = _project.Masks; if (selected < _project.Masks.Count) MaskList.SelectedIndex = selected;
             PositionSlider.Maximum = Math.Max(.001, _info.Duration); PositionSlider.StepFrequency = 1 / _project.Fps; PositionSlider.Value = _position;
             UpdateLabels();
@@ -572,11 +573,13 @@ public sealed partial class MainWindow : Window
         _exportCts = new(); var ct = _exportCts.Token; SetExportBusy(true);
         try
         {
-            var progress = new Progress<ExportProgress>(p => { ExportProgressBar.Value = p.Fraction * 100; ExportStage.Text = $"{p.Stage} · {p.Completed} / {p.Total}"; StatusLabel.Text = ExportStage.Text; });
+            var progress = new Progress<ExportProgress>(p => { ExportProgressBar.Value = p.Fraction * 100; ExportStage.Text = $"{p.Stage} · {p.Completed} / {p.Total}"; StatusLabel.Text = ExportStage.Text; if (p.Stage.StartsWith("Delta analysis ·", StringComparison.Ordinal)) DeltaBackendLabel.Text = p.Stage; });
             var service = new ExportService(_ffmpeg, () => new GpuFrameProcessor());
             DeltaReport? report = null;
             if (delta) report = await Task.Run(() => service.ExportDeltaAtlasAsync(project, info, destination, progress, ct), ct);
             else await Task.Run(() => webm ? service.ExportWebmAsync(project, info, destination, progress, ct) : service.ExportAtlasAsync(project, info, destination, progress, ct), ct);
+            if (report?.Performance is { } performance) App.LogMessage("Delta export performance: " + System.Text.Json.JsonSerializer.Serialize(performance, ProjectStore.JsonOptions));
+            if (report?.Performance is { } selected) DeltaBackendLabel.Text = $"Delta analysis · {selected.EffectiveBackend} · {selected.BackendReason}";
             _lastExport = webm ? destination : System.IO.Path.Combine(destination, delta ? "delta.animation.json" : "animation.json"); StatusLabel.Text = "Export complete · " + destination;
             ExportStage.Text = report == null ? "Export complete · ready to play" : DeltaSummary(report); OpenExportButton.IsEnabled = true;
         }

@@ -26,6 +26,7 @@ The Windows packages include .NET, WinUI and FFmpeg. End users do not need Node.
 - WebP atlas quality **1–100**, default **75 (medium)**; PNG for lossless images.
 - Transparent VP9 WebM with optional Opus audio.
 - **Delta Animation BETA** with reusable patches and a separate PixiJS runtime.
+- **Delta analysis: Auto / CPU / GPU** with DirectCompute acceleration, measured backend selection and CPU fallback.
 - Independent **Player** tab, project save/load, Undo/Redo, alpha/checkerboard/photo backgrounds and zoom.
 
 ## Quick start
@@ -54,7 +55,7 @@ In an example reported by the project's author:
 | Delta animation JSON | About **1 MB** |
 | Delta image + JSON | About **1.5 MB** combined |
 
-That is roughly a **96% reduction in image size**, or **88% for the combined delta assets compared with the 12 MB image alone**. These rounded figures describe one reported result, not a general benchmark or guarantee. The JSON is still relatively large; **further manifest and encoding optimization is planned**. Runtime bytes are separate and shared across animations.
+That is roughly a **96% reduction in image size**, or **88% for the combined delta assets compared with the 12 MB image alone**. These rounded figures describe an earlier v1 result, not a general benchmark or guarantee. New exports use **compact v2 JSON** with numeric patch references and inferred frame metadata, trim empty patch borders, and search multiple atlas layouts for denser pages. Runtime bytes are separate and shared across animations.
 
 Savings depend on content, resolution, frame count, noise, patch tolerance and WebP quality. Fully changing or noisy frames can compress less effectively. Count the complete exported assets and inspect playback quality on your own material.
 
@@ -72,6 +73,14 @@ A normal spritesheet stores complete frames even when large portions repeat. Del
 Transparent pixels overwrite old pixels; ordinary source-over blending would leave trails. The runtime uses replacement blending and nearest patch sampling, then displays the reconstructed canvas as a sprite.
 
 Smaller files do not reduce GPU memory by the same ratio: each player still needs an RGBA canvas, and atlas pages consume texture memory. See [DELTA-FORMAT.md](DELTA-FORMAT.md) for the full format and checks.
+
+### CPU/GPU analysis
+
+Choose **Delta analysis: Auto / CPU / GPU** in the export sidebar. This setting affects Delta pixel analysis and error checks; keying/crop/resize remain GPU accelerated, and image compression stays on the CPU. GPU analysis shares the already processed Direct3D texture and keeps the reconstructed canvas on the device. CPU and GPU use equivalent integer comparisons and preserve the exported format and quality settings.
+
+Auto keeps short or unknown-length clips on CPU to avoid calibration overhead. For at least 60 frames, it warms both backends, checks equivalence, and compares three samples including transfer/synchronization costs. It chooses GPU only when the measured gain exceeds timing variation and can repay initialization. The selected backend and fallback reason appear during export and in the summary. Project files remember the choice; older projects default to Auto. Export stage timings and GPU timestamp measurements are logged locally in `app.log`.
+
+Independent MaxRects trials and final atlas encodes use at most two CPU workers; encoding parallelism also has an image-memory budget. Candidate searches stop once accumulated nonnegative cost proves that a candidate cannot win. These optimizations preserve deterministic selection and output bytes. Whole-export speed depends on how much time the image codecs consume; faster GPU analysis alone does not imply the same speedup for the complete export.
 
 ### Tolerance and image quality
 
@@ -133,7 +142,7 @@ WebGL2 and WebGPU use the same runtime. An asset can serve multiple independent 
 
 ### Beta status
 
-The delta format, exporter and runtime are beta. Validate visual quality and game integration before production use. Planned work includes **smaller JSON manifests**, improved patch/atlas choices, broader hardware/browser coverage and more real-world quality testing. These are planned directions, not scheduled commitments.
+The delta format, exporter and runtime are beta. New exports use v2; install the updated reusable PixiJS runtime for those exports. The updated app/runtime also read old v1 exports. Validate visual quality and game integration before production use. Broader hardware/browser coverage and more real-world quality testing remain planned directions, not scheduled commitments.
 
 ## Other exports and editing tools
 

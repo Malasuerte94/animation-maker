@@ -3,6 +3,75 @@ using System.Text.Json;
 using AnimationMaker.Core;
 using AnimationMaker.Gpu;
 
+if (args is ["--benchmark-analysis", var benchmarkOutput])
+{
+    if (File.Exists(benchmarkOutput)) throw new IOException("Choose a new benchmark output path.");
+    var measurements = new List<object>();
+    foreach (var (name, width, height, dense) in new[] { ("small-sparse", 277, 512, false), ("1080p-sparse", 1920, 1080, false), ("1080p-dense", 1920, 1080, true), ("4k-sparse", 3840, 2160, false) })
+        foreach (var mode in Enum.GetValues<DeltaAnalysisBackend>())
+            for (int run = 0; run < 3; run++)
+            {
+                var profile = new ExportProfiler(); using var processor = new GpuFrameProcessor { Profiler = profile };
+                using var analyzer = new AdaptiveDeltaAnalyzer(mode, () => processor.CreateDeltaAnalyzer(profile), profile, 64);
+                var pixels = new byte[width * height * 4]; new Random(41).NextBytes(pixels);
+                for (int i = 3; i < pixels.Length; i += 4) pixels[i] = 255;
+                var canvas = new RgbaFrame(width, height, new byte[pixels.Length]); var samples = new List<double>();
+                for (int n = 0; n < 64; n++)
+                {
+                    var sampleInput = new RgbaFrame(width, height, (byte[])pixels.Clone());
+                    if (dense) for (int i = 0; i < sampleInput.Pixels.Length; i += 4) sampleInput.Pixels[i] = (byte)(sampleInput.Pixels[i] + n * 17);
+                    else for (int y = 4; y < 20; y++) for (int x = 4 + n; x < 20 + n; x++) sampleInput.Pixels[(y * width + x) * 4] = (byte)(n * 3);
+                    var current = processor.Process(sampleInput, new() { Enabled = false }, [], n / 30d, new(0, 0, width, height), new(width, height));
+                    var timer = Stopwatch.StartNew(); var analysis = analyzer.Analyze(current, canvas, 8);
+                    bool key = n % 30 == 0;
+                    RectI? bounds = key ? new(0, 0, width, height) : analysis.Bounds;
+                    List<DeltaOperation> ops = bounds is { } r ? [new("replace", r.X, r.Y, r.Width, r.Height, "p")] : [];
+                    if (key) Array.Clear(canvas.Pixels);
+                    foreach (var op in ops) for (int y = op.Y; y < op.Y + op.Height; y++)
+                        Buffer.BlockCopy(current.Pixels, (y * width + op.X) * 4, canvas.Pixels, (y * width + op.X) * 4, op.Width * 4);
+                    analyzer.Commit(current, ops, key);
+                    if (analyzer.MeasureError(current, canvas).Maximum > 8) throw new InvalidDataException("Analysis benchmark reconstruction failed.");
+                    if (n >= 4) samples.Add(timer.Elapsed.TotalMilliseconds);
+                }
+                samples.Sort(); var performance = profile.Snapshot();
+                measurements.Add(new { name, width, height, mode, run, actual = performance.EffectiveBackend,
+                    medianAnalysisMs = samples[samples.Count / 2], meanAnalysisMs = samples.Average(), performance });
+                Console.WriteLine($"{name} {mode} run {run + 1}: {samples[samples.Count / 2]:0.###} ms ({performance.EffectiveBackend})");
+            }
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(benchmarkOutput))!);
+    await File.WriteAllTextAsync(benchmarkOutput, JsonSerializer.Serialize(new { Includes = "Delta scan + CPU mirror update + commit + error check; excludes keyer and image codecs; median excludes first four frames", measurements }, ProjectStore.JsonOptions));
+    return;
+}
+
+if (args is ["--profile-video", var videoInput, var videoDestination, var videoBackend, var secondsText])
+{
+    var ffmpeg = new Ffmpeg(); var info = await ffmpeg.ProbeAsync(videoInput);
+    double seconds = Math.Min(info.Duration, double.Parse(secondsText, System.Globalization.CultureInfo.InvariantCulture));
+    var project = new ProjectDocument { SourcePath = Path.GetFullPath(videoInput), TrimEnd = seconds, Fps = Math.Min(30, info.Fps),
+        Export = new() { DeltaAnalysisBackend = Enum.Parse<DeltaAnalysisBackend>(videoBackend, true) } };
+    var service = new ExportService(ffmpeg, () => new GpuFrameProcessor());
+    var report = await service.ExportDeltaAtlasAsync(project, info, videoDestination, runtimeDirectory: Path.GetFullPath("runtime/pixi-delta/dist"));
+    Console.WriteLine(JsonSerializer.Serialize(report, ProjectStore.JsonOptions));
+    return;
+}
+
+if (args is ["--profile", var profileInput, var profileDestination, var backendText, var limitText])
+{
+    var source = new DeltaAtlasPlayer(profileInput);
+    int count = Math.Min(source.Info.FrameCount, int.Parse(limitText, System.Globalization.CultureInfo.InvariantCulture));
+    var mode = Enum.Parse<DeltaAnalysisBackend>(backendText, true);
+    var profiler = new ExportProfiler();
+    using var analyzer = new AdaptiveDeltaAnalyzer(mode, () => new GpuDeltaAnalyzer(profiler), profiler, count);
+    async IAsyncEnumerable<RgbaFrame> decoded()
+    {
+        for (int i = 0; i < count; i++) { yield return source.ReadFrame(i); await Task.Yield(); }
+    }
+    var report = await DeltaAtlasExporter.ExportAsync(decoded(), profileDestination, new() { DeltaAnalysisBackend = mode }, source.Info.Fps,
+        expectedFrames: count, runtimeDirectory: Path.GetFullPath("runtime/pixi-delta/dist"), analyzer: analyzer, profiler: profiler);
+    Console.WriteLine(JsonSerializer.Serialize(report, ProjectStore.JsonOptions));
+    return;
+}
+
 if (args is ["--reencode", var input, var destination, var toleranceText])
 {
     var source = new DeltaAtlasPlayer(input);

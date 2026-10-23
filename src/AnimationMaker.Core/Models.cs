@@ -8,6 +8,7 @@ public enum MaskKind { Keep, Remove }
 public enum AtlasLayout { Packed, Grid }
 public enum AtlasImageFormat { Webp, Png }
 public enum VideoQuality { High, Balanced, Small, Lossless }
+public enum DeltaAnalysisBackend { Auto, Cpu, Gpu }
 public enum PreviewBackground { Checkerboard, White, Black, Magenta, Alpha, Image }
 public enum BackgroundImageFit { Fill, Fit }
 public readonly record struct PointD(double X, double Y);
@@ -69,12 +70,14 @@ public sealed record ExportSettings
     public VideoQuality VideoQuality { get; init; } = VideoQuality.High;
     public bool IncludeAudio { get; init; }
     public int DeltaTolerance { get; init; } = 8;
+    public DeltaAnalysisBackend DeltaAnalysisBackend { get; init; } = DeltaAnalysisBackend.Auto;
 
     [JsonIgnore]
     public string ImageExtension => ImageFormat == AtlasImageFormat.Webp ? ".webp" : ".png";
     public void ValidateImageEncoding()
     {
         if (!Enum.IsDefined(ImageFormat)) throw new InvalidDataException("Unsupported atlas image format.");
+        if (!Enum.IsDefined(DeltaAnalysisBackend)) throw new InvalidDataException("Unsupported Delta analysis backend.");
         if (WebpQuality is < 1 or > 100) throw new InvalidDataException("WebP quality must be between 1 and 100.");
     }
 }

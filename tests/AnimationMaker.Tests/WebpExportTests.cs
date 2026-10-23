@@ -23,6 +23,28 @@ public sealed class WebpExportTests
     }
 
     [Fact]
+    public async Task PackedAtlasAvoidsLongStripsAndPreservesFramePositions()
+    {
+        var frames = Enumerable.Range(0, 30).Select(n => {
+            var frame = new RgbaFrame(64, 96, new byte[64 * 96 * 4]);
+            for (int y = 10; y < 80; y++) for (int x = 8; x < 28; x++)
+            {
+                int i = (y * 64 + x) * 4; frame.Pixels[i] = (byte)(n * 7); frame.Pixels[i + 3] = 255;
+            }
+            return frame;
+        }).ToArray();
+        string path = Folder();
+        await AtlasExporter.ExportAsync(Sequence(frames), path, new() { ImageFormat = AtlasImageFormat.Png }, 30);
+        using var descriptor = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(path, "atlas-000.json")));
+        var size = descriptor.RootElement.GetProperty("meta").GetProperty("size");
+        int w = size.GetProperty("w").GetInt32(), h = size.GetProperty("h").GetInt32();
+        Assert.InRange((double)Math.Max(w, h) / Math.Min(w, h), 1, 2.5);
+        Assert.True((long)w * h < 30L * 26 * 76 * 1.3);
+        var player = new AtlasPlayer(Path.Combine(path, "animation.json"));
+        for (int i = 0; i < frames.Length; i++) Assert.Equal(frames[i].Pixels, player.ReadFrame(i).Pixels);
+    }
+
+    [Fact]
     public void WebpQualityChangesCompressionAndPreservesAlpha()
     {
         var frame = Image(); string path = Folder(); Directory.CreateDirectory(path);
@@ -86,11 +108,11 @@ public sealed class WebpExportTests
         Assert.Empty(Directory.GetFiles(path, "*.png"));
         Assert.All(Directory.GetFiles(path), f => Assert.True(f.EndsWith(".webp", StringComparison.Ordinal) || Path.GetFileName(f) == "delta.animation.json"));
         Assert.Equal(report.DeltaBytes, new FileInfo(Path.Combine(path, "delta.animation.json")).Length + Directory.GetFiles(path, "*.webp").Sum(f => new FileInfo(f).Length));
-        long sum = 0; int max = 0;
+        long sum = 0; int max = 0; var hashes = new List<string>();
         for (int n = 0; n < frames.Count; n++)
         {
             var decoded = player.ReadFrame(n);
-            Assert.Equal(player.Manifest.Frames[n].Sha256, Convert.ToHexString(SHA256.HashData(decoded.Pixels)));
+            hashes.Add(Convert.ToHexString(SHA256.HashData(decoded.Pixels)));
             for (int i = 0; i < decoded.Pixels.Length; i += 4)
             {
                 Assert.InRange(Math.Abs(frames[n].Pixels[i + 3] - decoded.Pixels[i + 3]), 0, tolerance);
@@ -101,7 +123,7 @@ public sealed class WebpExportTests
         Assert.Equal((double)sum / (frames.Count * initial.Width * initial.Height), report.MeanVisibleError, 8);
         Assert.True(report.MaximumVisibleError > tolerance);
         foreach (int n in new[] { 41, 0, 30, 34, 33, 2, 36 })
-            Assert.Equal(player.Manifest.Frames[n].Sha256, Convert.ToHexString(SHA256.HashData(player.ReadFrame(n).Pixels)));
+            Assert.Equal(hashes[n], Convert.ToHexString(SHA256.HashData(player.ReadFrame(n).Pixels)));
         Assert.All(player.ReadFrame(34).Pixels, b => Assert.Equal((byte)0, b));
     }
 

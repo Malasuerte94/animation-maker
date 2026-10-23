@@ -16,21 +16,23 @@ public sealed record DeltaReport(long ClassicBytes, long DeltaBytes, double Savi
     int UniquePatches, double AverageOperations, int MaximumOperations, long AtlasGpuBytes, long PerPlayerGpuBytes,
     int VerifiedFrames, long RuntimeBytes, long DemoBytes, string Recommendation,
     int Tolerance = 0, int MaximumVisibleError = 0, double MeanVisibleError = 0, double UpdatedPixelPercent = 0,
-    string TextureFormat = "png", int? TextureQuality = null);
+    string TextureFormat = "png", int? TextureQuality = null, ExportPerformance? Performance = null);
 
 public static class DeltaAtlasExporter
 {
     public const string Format = "animation-maker-delta";
     public const int KeyframeInterval = 30, MaximumOperations = 128;
     private const long StagingLimit = 8L * 1024 * 1024 * 1024;
-    private static readonly JsonSerializerOptions CompactJson = new(ProjectStore.JsonOptions) { WriteIndented = false };
-    private sealed record Payload(string Id, RgbaFrame Image, byte[] Png);
+    private sealed record Payload(string Id, RgbaFrame Image, byte[] Png, long EncodedBytes);
     private sealed record Candidate(List<DeltaOperation> Operations, Dictionary<string, Payload> NewPayloads, long Cost);
 
     public static async Task<DeltaReport> ExportAsync(IAsyncEnumerable<RgbaFrame> frames, string destination,
         ExportSettings settings, double fps, IProgress<ExportProgress>? progress = null, int expectedFrames = 0,
-        CancellationToken ct = default, string? runtimeDirectory = null)
+        CancellationToken ct = default, string? runtimeDirectory = null, IDeltaAnalyzer? analyzer = null, ExportProfiler? profiler = null)
     {
+        profiler ??= new ExportProfiler();
+        using var defaultAnalyzer = analyzer == null ? new AdaptiveDeltaAnalyzer(settings.DeltaAnalysisBackend, null, profiler, expectedFrames) : null;
+        analyzer ??= defaultAnalyzer!;
         if (!double.IsFinite(fps) || fps <= 0 || fps > 240) throw new InvalidDataException("Invalid delta FPS.");
         if (settings.MaxAtlasSize is not (2048 or 4096 or 8192)) throw new InvalidDataException("Invalid delta atlas size.");
         if (settings.DeltaTolerance is < 0 or > 32) throw new InvalidDataException("Delta tolerance must be between 0 and 32.");
@@ -42,6 +44,7 @@ public static class DeltaAtlasExporter
         string cache = Path.Combine(staging, ".patches"), baseline = Path.Combine(staging, ".classic");
         Directory.CreateDirectory(cache);
         var stored = new Dictionary<string, SpriteRecord>();
+        var measuredSizes = new Dictionary<string, long>();
         var encodedFrames = new List<DeltaFrame>(); var keys = new List<int>();
         long payloadBytes = 0, baselineBytes = 0; int width = 0, height = 0, lastKey = -KeyframeInterval;
         long errorSum = 0, updatedPixels = 0; int maximumError = 0;
@@ -59,17 +62,20 @@ public static class DeltaAtlasExporter
                     if (width + 2 > settings.MaxAtlasSize || height + 2 > settings.MaxAtlasSize) throw new InvalidDataException("The delta canvas exceeds the atlas page. Lower frame height or increase atlas size.");
                     int index = encodedFrames.Count;
                     bool keyframe = index - lastKey >= KeyframeInterval;
+                    DeltaAnalysis changes;
+                    using (profiler.Measure("delta_scan")) changes = analyzer.Analyze(frame, reconstructed, settings.DeltaTolerance, token);
+                    var evaluator = new FrameEvaluator(frame, stored, measuredSizes, settings, changes.NonzeroBounds, profiler, token);
+                    long selectionStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                     Candidate best;
-                    if (keyframe) best = Independent(frame, stored, token);
+                    if (keyframe) best = Independent(frame, evaluator, token);
                     else
                     {
                         // Compare against what the player actually displays, never against the previous source.
                         // This bounds approximation error even after long runs of tiny changes.
-                        var changes = Changes(reconstructed, frame, settings.DeltaTolerance, token);
                         if (changes.Bounds == null) best = new([], [], 0);
                         else
                         {
-                            best = Evaluate(frame, [changes.Bounds.Value], stored, token);
+                            best = evaluator.Evaluate([changes.Bounds.Value]);
                             foreach (int tile in new[] { 8, 16, 32, 64 })
                             {
                                 var rects = TileRectangles(changes.Mask, width, height, tile, token);
@@ -81,21 +87,29 @@ public static class DeltaAtlasExporter
                                 Consider(blocks.Select(r => Tighten(r, changes.Mask, width)).ToList());
                             }
                             foreach (var partition in SparsePartitions(changes.Mask, width, changes.Bounds.Value, token)) Consider(partition);
-                            var full = Evaluate(frame, [new(0, 0, width, height)], stored, token);
+                            var full = evaluator.Evaluate([new(0, 0, width, height)], independent: true, costLimit: best.Cost + 1);
                             if (full.Cost <= best.Cost) { best = full; keyframe = true; }
                             if (best.Operations is [{ X: 0, Y: 0 } op] && op.Width == width && op.Height == height) keyframe = true;
                             void Consider(List<RectI> rects)
                             {
                                 if (rects.Count > MaximumOperations) return;
-                                var candidate = Evaluate(frame, rects, stored, token);
+                                var candidate = evaluator.Evaluate(rects, costLimit: best.Cost);
                                 if (candidate.Cost < best.Cost) best = candidate;
                             }
                         }
                     }
+                    profiler.AddWall("patch_selection_inclusive", System.Diagnostics.Stopwatch.GetElapsedTime(selectionStarted).TotalMilliseconds);
                     foreach (var payload in best.NewPayloads.Values)
                     {
                         string file = Path.Combine(cache, payload.Id + ".png");
-                        await File.WriteAllBytesAsync(file, payload.Png, token); payloadBytes += payload.Png.Length; checkBudget();
+                        byte[] png;
+                        using (profiler.Measure("patch_png_encode"))
+                        {
+                            png = payload.Png.Length == 0 ? Imaging.EncodePng(payload.Image) : payload.Png;
+                            if (payload.Png.Length == 0) profiler.Count("patch_png_encodes");
+                        }
+                        using (profiler.Measure("patch_disk_write")) await File.WriteAllBytesAsync(file, png, token);
+                        payloadBytes += png.Length; checkBudget();
                         stored.Add(payload.Id, new(payload.Id, file, new(0, 0, payload.Image.Width, payload.Image.Height), new(width, height), payload.Id));
                     }
                     if (keyframe) { lastKey = index; keys.Add(index); }
@@ -109,13 +123,20 @@ public static class DeltaAtlasExporter
                             Buffer.BlockCopy(frame.Pixels, offset, reconstructed.Pixels, offset, op.Width * 4);
                         }
                     }
-                    for (int i = 0; i < frame.Pixels.Length; i += 4)
+                    DeltaError measured;
+                    using (profiler.Measure("reconstruction_and_error"))
                     {
-                        int error = VisibleError(frame.Pixels, reconstructed.Pixels, i);
-                        maximumError = Math.Max(maximumError, error); errorSum += error;
-                        if (error > settings.DeltaTolerance) throw new InvalidDataException("Delta error exceeds the selected tolerance.");
+                        analyzer.Commit(frame, best.Operations, keyframe, token);
+                        measured = analyzer.MeasureError(frame, reconstructed, token);
                     }
-                    encodedFrames.Add(new(1000 / fps, keyframe, best.Operations, Convert.ToHexString(SHA256.HashData(reconstructed.Pixels))));
+                    maximumError = Math.Max(maximumError, measured.Maximum); errorSum += measured.Sum;
+                    if (measured.Maximum > settings.DeltaTolerance) throw new InvalidDataException("Delta error exceeds the selected tolerance.");
+                    if (settings.DeltaTolerance == 0 && !frame.Pixels.AsSpan().SequenceEqual(reconstructed.Pixels))
+                        throw new InvalidDataException("Exact Delta selection did not preserve RGBA bytes.");
+                    string frameHash;
+                    using (profiler.Measure("hash")) frameHash = Convert.ToHexString(SHA256.HashData(reconstructed.Pixels));
+                    encodedFrames.Add(new(1000 / fps, keyframe, best.Operations, frameHash));
+                    profiler.Count("frames");
                     progress?.Report(new(settings.DeltaTolerance == 0 ? "Delta · exact RGBA patches" : $"Delta · sparse patches · tolerance {settings.DeltaTolerance}/255", index + 1, expectedFrames));
                     yield return frame;
                 }
@@ -123,41 +144,57 @@ public static class DeltaAtlasExporter
             // The classic encoder pulls this iterator: decode/keying runs once, and both encoders see the exact same bytes.
             // Keep an exact classic baseline to measure final WebP error without decoding/keying the video again.
             await AtlasExporter.ExportAsync(encode(ct), baseline, settings with { Layout = AtlasLayout.Packed, Deduplicate = true, ImageFormat = AtlasImageFormat.Png }, fps,
-                expectedFrames: expectedFrames, ct: ct, stagedBytesChanged: bytes => { baselineBytes = bytes; checkBudget(); });
+                expectedFrames: expectedFrames, ct: ct, stagedBytesChanged: bytes => { baselineBytes = bytes; checkBudget(); }, profiler: profiler);
             baselineBytes = Directory.EnumerateFiles(baseline).Where(f => !f.EndsWith("phaser.json", StringComparison.Ordinal)).Sum(f => new FileInfo(f).Length);
             checkBudget();
-            var pages = new List<AtlasPage>(); var patches = new Dictionary<string, DeltaPatch>();
-            foreach (var sprite in stored.Values.OrderByDescending(s => Math.Max(s.Bounds.Width, s.Bounds.Height)).ThenBy(s => s.Name, StringComparer.Ordinal))
+            List<byte[]> smallestEncodedPages = []; long smallestPageBytes = long.MaxValue; int smallestLayout = int.MaxValue, comparedLayouts = 0;
+            var layoutGate = new object();
+            List<AtlasPage> pages;
+            using (profiler.Measure("delta_packing_inclusive")) pages = AtlasPacker.Pack(stored.Values, settings.MaxAtlasSize, 1, ct, (layout, layoutIndex) =>
             {
-                ct.ThrowIfCancellationRequested(); int w = sprite.Bounds.Width + 2, h = sprite.Bounds.Height + 2;
-                int pageIndex = pages.FindIndex(p => p.TryPlace(sprite, w, h));
-                if (pageIndex < 0) { var page = new AtlasPage(settings.MaxAtlasSize); if (!page.TryPlace(sprite, w, h)) throw new InvalidDataException("Patch does not fit in the atlas."); pages.Add(page); pageIndex = pages.Count - 1; }
-                var slot = pages[pageIndex].Sprites[^1].Slot;
-                patches.Add(sprite.Name, new(pageIndex, new(slot.X + 1, slot.Y + 1, sprite.Bounds.Width, sprite.Bounds.Height)));
-            }
+                var encoded = new List<byte[]>();
+                foreach (var page in layout)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var image = new RgbaFrame(page.Width, page.Height, new byte[checked(page.Width * page.Height * 4)]);
+                    foreach (var placement in page.Sprites)
+                    {
+                        ct.ThrowIfCancellationRequested(); var patch = Imaging.Load(placement.Sprite.File);
+                        for (int y = 0; y < patch.Height; y++) Buffer.BlockCopy(patch.Pixels, y * patch.Width * 4, image.Pixels,
+                            ((placement.Slot.Y + 1 + y) * image.Width + placement.Slot.X + 1) * 4, patch.Width * 4);
+                    }
+                    using (profiler.Measure("final_atlas_encode")) encoded.Add(Imaging.EncodeAtlasImage(image, settings));
+                    profiler.Count("final_atlas_encodes");
+                }
+                long size = encoded.Sum(data => (long)data.Length);
+                lock (layoutGate)
+                    if (size < smallestPageBytes || (size == smallestPageBytes && layoutIndex < smallestLayout))
+                    { smallestPageBytes = size; smallestLayout = layoutIndex; smallestEncodedPages = encoded; }
+                progress?.Report(new("Comparing compressed atlas layouts", Interlocked.Increment(ref comparedLayouts), 4));
+                return size;
+            }, profiler);
+            var patches = new Dictionary<string, DeltaPatch>();
+            for (int pageIndex = 0; pageIndex < pages.Count; pageIndex++)
+                foreach (var placed in pages[pageIndex].Sprites)
+                    patches.Add(placed.Sprite.Name, new(pageIndex, new(placed.Slot.X + 1, placed.Slot.Y + 1, placed.Sprite.Bounds.Width, placed.Sprite.Bounds.Height)));
             var pageData = new List<DeltaPage>();
             for (int i = 0; i < pages.Count; i++)
             {
                 ct.ThrowIfCancellationRequested(); var page = pages[i];
-                var image = new RgbaFrame(page.Width, page.Height, new byte[checked(page.Width * page.Height * 4)]);
-                foreach (var placement in page.Sprites)
-                {
-                    ct.ThrowIfCancellationRequested(); var patch = Imaging.Load(placement.Sprite.File);
-                    for (int y = 0; y < patch.Height; y++) Buffer.BlockCopy(patch.Pixels, y * patch.Width * 4, image.Pixels,
-                        ((placement.Slot.Y + 1 + y) * image.Width + placement.Slot.X + 1) * 4, patch.Width * 4);
-                }
-                string name = $"delta-{i:D3}" + settings.ImageExtension; Imaging.SaveAtlasImage(Path.Combine(staging, name), image, settings);
+                string name = $"delta-{i:D3}" + settings.ImageExtension;
+                using (profiler.Measure("final_disk_write")) await File.WriteAllBytesAsync(Path.Combine(staging, name), smallestEncodedPages[i], ct);
                 payloadBytes += new FileInfo(Path.Combine(staging, name)).Length; checkBudget();
                 pageData.Add(new(name, page.Width, page.Height)); progress?.Report(new("Packing delta pages", i + 1, pages.Count));
             }
-            var manifest = new DeltaManifest(Format, 1, width, height, fps, pageData, patches, keys, encodedFrames,
+            var manifest = new DeltaManifest(Format, 2, width, height, fps, pageData, patches, keys, encodedFrames,
                 new(lossyTextures ? "lossy" : settings.DeltaTolerance == 0 ? "lossless" : "bounded-error", settings.DeltaTolerance,
                     lossyTextures ? "webp" : "png", lossyTextures ? settings.WebpQuality : null));
             string manifestPath = Path.Combine(staging, "delta.animation.json");
-            await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, CompactJson), ct);
+            using (profiler.Measure("manifest_write")) await File.WriteAllTextAsync(manifestPath, DeltaManifestJson.Serialize(manifest), ct);
             var player = new DeltaAtlasPlayer(manifestPath);
             var sourcePlayer = lossyTextures ? new AtlasPlayer(Path.Combine(baseline, "animation.json")) : null;
             if (lossyTextures) { maximumError = 0; errorSum = 0; }
+            var verificationStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             for (int i = 0; i < encodedFrames.Count; i++)
             {
                 ct.ThrowIfCancellationRequested(); var reconstructed = player.ReadFrame(i, ct);
@@ -181,7 +218,6 @@ public static class DeltaAtlasExporter
             }
             if (lossyTextures)
             {
-                await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifest, CompactJson), ct);
                 var verified = new DeltaAtlasPlayer(manifestPath);
                 for (int i = 0; i < encodedFrames.Count; i++)
                 {
@@ -191,6 +227,7 @@ public static class DeltaAtlasExporter
                     progress?.Report(new("Verifying published WebP frames", i + 1, encodedFrames.Count));
                 }
             }
+            profiler.AddWall("final_verification", System.Diagnostics.Stopwatch.GetElapsedTime(verificationStarted).TotalMilliseconds);
             long dataBytes = pageData.Sum(p => new FileInfo(Path.Combine(staging, p.Image)).Length) + new FileInfo(manifestPath).Length;
             long runtimeBytes = 0, demoBytes = 0;
             if (runtimeDirectory != null)
@@ -213,72 +250,118 @@ public static class DeltaAtlasExporter
                 100d * updatedPixels / ((long)width * height * encodedFrames.Count),
                 lossyTextures ? "webp" : "png", lossyTextures ? settings.WebpQuality : null);
             // Normal exports contain playable assets only. Diagnostic bundles explicitly opt into the report/demo.
-            if (runtimeDirectory != null)
-                await File.WriteAllTextAsync(Path.Combine(staging, "delta.report.json"), JsonSerializer.Serialize(report, ProjectStore.JsonOptions), ct);
             await StagingFiles.DeleteDirectoryAsync(cache); await StagingFiles.DeleteDirectoryAsync(baseline);
-            ct.ThrowIfCancellationRequested(); Directory.Move(staging, destination); return report;
+            report = report with { Performance = profiler.Snapshot() };
+            if (runtimeDirectory != null) await File.WriteAllTextAsync(Path.Combine(staging, "delta.report.json"), JsonSerializer.Serialize(report, ProjectStore.JsonOptions), ct);
+            ct.ThrowIfCancellationRequested(); Directory.Move(staging, destination);
+            return report;
         }
         finally { await StagingFiles.DeleteDirectoryAsync(staging); }
     }
 
-    private static Candidate Evaluate(RgbaFrame frame, IReadOnlyList<RectI> regions, Dictionary<string, SpriteRecord> stored, CancellationToken ct)
+    private sealed class FrameEvaluator(RgbaFrame frame, Dictionary<string, SpriteRecord> stored, Dictionary<string, long> measuredSizes, ExportSettings settings,
+        RectI? nonzeroBounds, ExportProfiler profiler, CancellationToken ct)
     {
-        var operations = new List<DeltaOperation>(); var payloads = new Dictionary<string, Payload>(); long bytes = 0;
-        foreach (var rect in regions)
+        private readonly Dictionary<RectI, Payload> _payloads = [];
+        public Candidate Evaluate(IReadOnlyList<RectI> regions, bool independent = false, long costLimit = long.MaxValue)
         {
-            ct.ThrowIfCancellationRequested(); var image = AtlasExporter.Cut(frame, rect);
-            if (image.Pixels.AsSpan().IndexOfAnyExcept((byte)0) < 0) { operations.Add(new("clear", rect.X, rect.Y, rect.Width, rect.Height)); continue; }
-            string id = $"{rect.Width}x{rect.Height}-" + Convert.ToHexString(SHA256.HashData(image.Pixels));
-            operations.Add(new("replace", rect.X, rect.Y, rect.Width, rect.Height, id));
-            if (stored.ContainsKey(id) || payloads.ContainsKey(id)) continue;
-            var png = Imaging.EncodePng(image); payloads.Add(id, new(id, image, png)); bytes += png.Length;
+            var operations = new List<DeltaOperation>(); var payloads = new Dictionary<string, Payload>(); long bytes = 0;
+            foreach (var region in regions)
+            {
+                ct.ThrowIfCancellationRequested();
+                // Remaining costs are nonnegative; a candidate that already cannot win needs no more codecs.
+                if (bytes + operations.Sum(o => o.Kind == "clear" ? 24L : 16L) >= costLimit)
+                { profiler.Count("pruned_candidates"); return new([], [], long.MaxValue); }
+                // Trim only all-zero RGBA, preserving even invisible RGB in exact PNG mode.
+                RectI? rect;
+                using (profiler.Measure("data_bounds")) rect = region == new RectI(0, 0, frame.Width, frame.Height) ? nonzeroBounds : DataBounds(frame, region);
+                if (rect == null)
+                {
+                    if (!independent) operations.Add(new("clear", region.X, region.Y, region.Width, region.Height));
+                    continue;
+                }
+                if (!independent && rect.Value != region)
+                    operations.Add(new("clear", region.X, region.Y, region.Width, region.Height));
+                var r = rect.Value;
+                if (!_payloads.TryGetValue(r, out var payload))
+                {
+                    var image = AtlasExporter.Cut(frame, r);
+                    string id;
+                    using (profiler.Measure("hash")) id = $"{r.Width}x{r.Height}-" + Convert.ToHexString(SHA256.HashData(image.Pixels));
+                    bool known = stored.ContainsKey(id);
+                    byte[] png = [];
+                    long size = 0;
+                    if (!known && !measuredSizes.TryGetValue(id, out size))
+                    {
+                        if (settings.ImageFormat == AtlasImageFormat.Webp)
+                        {
+                            using (profiler.Measure("candidate_compression")) size = Imaging.EncodeWebp(image, settings.WebpQuality).Length;
+                            profiler.Count("candidate_webp_encodes");
+                        }
+                        else
+                        {
+                            using (profiler.Measure("candidate_compression")) png = Imaging.EncodePng(image);
+                            profiler.Count("candidate_png_encodes"); size = png.Length;
+                        }
+                        if (measuredSizes.Count >= 32768) measuredSizes.Clear();
+                        measuredSizes[id] = size;
+                    }
+                    else if (!known) profiler.Count("candidate_compression_cache_hits");
+                    payload = new(id, image, png, size); _payloads.Add(r, payload);
+                }
+                operations.Add(new("replace", r.X, r.Y, r.Width, r.Height, payload.Id));
+                if (stored.ContainsKey(payload.Id) || payloads.ContainsKey(payload.Id)) continue;
+                payloads.Add(payload.Id, payload);
+                // Include texture area/padding and compact patch metadata, not the old verbose JSON.
+                bytes += payload.EncodedBytes + 24 + ((long)(r.Width + 2) * (r.Height + 2) + 31) / 32;
+            }
+            if (operations.Count > MaximumOperations) return new([], [], long.MaxValue);
+            // Numeric references + x/y; clear additionally stores width/height.
+            bytes += operations.Sum(o => o.Kind == "clear" ? 24L : 16L);
+            return new(operations, payloads, bytes);
         }
-        bytes += JsonSerializer.SerializeToUtf8Bytes(operations, CompactJson).Length;
-        return new(operations, payloads, bytes);
     }
-    private static Candidate Independent(RgbaFrame frame, Dictionary<string, SpriteRecord> stored, CancellationToken ct)
+    private static RectI? DataBounds(RgbaFrame frame, RectI region)
     {
-        var best = Evaluate(frame, [new(0, 0, frame.Width, frame.Height)], stored, ct);
+        int l = region.X + region.Width, t = region.Y + region.Height, r = -1, b = -1;
+        for (int y = region.Y; y < region.Y + region.Height; y++)
+            for (int x = region.X; x < region.X + region.Width; x++)
+            {
+                int i = (y * frame.Width + x) * 4;
+                if ((frame.Pixels[i] | frame.Pixels[i + 1] | frame.Pixels[i + 2] | frame.Pixels[i + 3]) == 0) continue;
+                l = Math.Min(l, x); t = Math.Min(t, y); r = Math.Max(r, x); b = Math.Max(b, y);
+            }
+        return r < 0 ? null : new(l, t, r - l + 1, b - t + 1);
+    }
+    private static Candidate Independent(RgbaFrame frame, FrameEvaluator evaluator, CancellationToken ct)
+    {
+        var canvas = new RectI(0, 0, frame.Width, frame.Height);
+        var best = evaluator.Evaluate([canvas], independent: true);
         // Checkpoints can reuse the same atlas blocks as delta frames; they need not store full images.
         foreach (int tile in new[] { 16, 32, 64, 128, 256 })
         {
             if ((long)((frame.Width + tile - 1) / tile) * ((frame.Height + tile - 1) / tile) > MaximumOperations) continue;
             var blocks = Blocks(null, frame.Width, frame.Height, tile, ct);
-            var candidate = Evaluate(frame, blocks, stored, ct);
+            var candidate = evaluator.Evaluate(blocks, independent: true, costLimit: best.Cost);
             if (candidate.Cost < best.Cost) best = candidate;
+        }
+        if (DataBounds(frame, canvas) is { } bounds)
+        {
+            var mask = new bool[frame.Width * frame.Height];
+            for (int i = 0; i < mask.Length; i++)
+            {
+                int p = i * 4;
+                mask[i] = (frame.Pixels[p] | frame.Pixels[p + 1] | frame.Pixels[p + 2] | frame.Pixels[p + 3]) != 0;
+            }
+            foreach (var regions in SparsePartitions(mask, frame.Width, bounds, ct))
+            {
+                var candidate = evaluator.Evaluate(regions, independent: true, costLimit: best.Cost);
+                if (candidate.Cost < best.Cost) best = candidate;
+            }
         }
         return best;
     }
-    // Maximum display-channel error over both black and white, with alpha also bounded.
-    // Affine alpha compositing means this bounds the error over any solid RGB background.
-    private static int VisibleError(byte[] a, byte[] b, int i)
-    {
-        int alpha = a[i + 3], oldAlpha = b[i + 3], error = Math.Abs(alpha - oldAlpha) * 255;
-        for (int c = 0; c < 3; c++)
-        {
-            error = Math.Max(error, Math.Abs(a[i + c] * alpha - b[i + c] * oldAlpha));
-            error = Math.Max(error, Math.Abs((255 - a[i + c]) * alpha - (255 - b[i + c]) * oldAlpha));
-        }
-        return (error + 254) / 255;
-    }
-    private static (bool[] Mask, RectI? Bounds) Changes(RgbaFrame previous, RgbaFrame current, int tolerance, CancellationToken ct)
-    {
-        var mask = new bool[current.Width * current.Height]; int l = current.Width, t = current.Height, r = -1, b = -1;
-        for (int y = 0; y < current.Height; y++)
-        {
-            ct.ThrowIfCancellationRequested();
-            for (int x = 0; x < current.Width; x++)
-            {
-                int pixel = y * current.Width + x, i = pixel * 4;
-                if (tolerance == 0 ? previous.Pixels.AsSpan(i, 4).SequenceEqual(current.Pixels.AsSpan(i, 4)) :
-                    VisibleError(previous.Pixels, current.Pixels, i) <= tolerance &&
-                    // Always clear disappearing pixels and write newly visible pixels: no alpha ghosts.
-                    (previous.Pixels[i + 3] == 0) == (current.Pixels[i + 3] == 0)) continue;
-                mask[pixel] = true; l = Math.Min(l, x); t = Math.Min(t, y); r = Math.Max(r, x); b = Math.Max(b, y);
-            }
-        }
-        return (mask, r < 0 ? null : new(l, t, r - l + 1, b - t + 1));
-    }
+    private static int VisibleError(byte[] a, byte[] b, int i) => CpuDeltaAnalyzer.VisibleError(a, b, i);
     private static List<RectI> Blocks(bool[]? changed, int width, int height, int tile, CancellationToken ct)
     {
         var result = new List<RectI>();
@@ -400,13 +483,13 @@ public sealed class DeltaAtlasPlayer : IAnimationSource
         _directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
         try
         {
-            Manifest = JsonSerializer.Deserialize<DeltaManifest>(File.ReadAllText(path), ProjectStore.JsonOptions) ?? throw new InvalidDataException("Empty delta manifest.");
+            Manifest = DeltaManifestJson.Deserialize(File.ReadAllText(path));
             Validate();
             Info = new(Manifest.Width, Manifest.Height, Manifest.Fps, Manifest.Frames.Select(f => f.DurationMs).ToArray());
             string report = Path.Combine(_directory, "delta.report.json");
             if (File.Exists(report)) Report = JsonSerializer.Deserialize<DeltaReport>(File.ReadAllText(report), ProjectStore.JsonOptions);
         }
-        catch (Exception ex) when (ex is JsonException or NullReferenceException or ArgumentException or OverflowException) { throw new InvalidDataException("Invalid delta manifest.", ex); }
+        catch (Exception ex) when (ex is JsonException or NullReferenceException or ArgumentException or OverflowException or KeyNotFoundException or InvalidOperationException or FormatException) { throw new InvalidDataException("Invalid delta manifest.", ex); }
     }
     private string SafePath(string relative)
     {
@@ -418,7 +501,7 @@ public sealed class DeltaAtlasPlayer : IAnimationSource
     private void Validate()
     {
         var m = Manifest;
-        if (m.Format != DeltaAtlasExporter.Format || m.Version != 1 || m.Width <= 0 || m.Height <= 0 || (long)m.Width * m.Height > 67108864 || !double.IsFinite(m.Fps) || m.Fps < 1 || m.Fps > 240 || m.Frames.Count == 0 || m.Keyframes.Count == 0 || m.Keyframes[0] != 0) throw new InvalidDataException("Unsupported delta manifest.");
+        if (m.Format != DeltaAtlasExporter.Format || m.Version is not (1 or 2) || m.Width <= 0 || m.Height <= 0 || (long)m.Width * m.Height > 67108864 || !double.IsFinite(m.Fps) || m.Fps < 1 || m.Fps > 240 || m.Frames.Count == 0 || m.Keyframes.Count == 0 || m.Keyframes[0] != 0) throw new InvalidDataException("Unsupported delta manifest.");
         if (m.Encoding is { } encoding && (encoding.Tolerance is < 0 or > 32 || encoding.TextureFormat is not ("png" or "webp") ||
             (encoding.TextureFormat == "webp" ? encoding.Mode != "lossy" || encoding.TextureQuality is not (>= 1 and <= 100) :
                 encoding.Mode != (encoding.Tolerance == 0 ? "lossless" : "bounded-error") || encoding.TextureQuality != null)))
@@ -434,7 +517,8 @@ public sealed class DeltaAtlasPlayer : IAnimationSource
         for (int i = 0; i < m.Frames.Count; i++)
         {
             var f = m.Frames[i];
-            if (!double.IsFinite(f.DurationMs) || Math.Abs(f.DurationMs - 1000 / m.Fps) > .000001 || f.Operations.Count > DeltaAtlasExporter.MaximumOperations || f.Sha256.Length != 64 || !f.Sha256.All(Uri.IsHexDigit)) throw new InvalidDataException("Invalid delta frame timing, hash or operation count.");
+            if (!double.IsFinite(f.DurationMs) || Math.Abs(f.DurationMs - 1000 / m.Fps) > .000001 || f.Operations.Count > DeltaAtlasExporter.MaximumOperations ||
+                (m.Version == 1 && (f.Sha256.Length != 64 || !f.Sha256.All(Uri.IsHexDigit)))) throw new InvalidDataException("Invalid delta frame timing, hash or operation count.");
             if (f.Keyframe) { actualKeys.Add(i); lastKey = i; }
             if (i - lastKey >= DeltaAtlasExporter.KeyframeInterval) throw new InvalidDataException("Missing delta checkpoint.");
             foreach (var op in f.Operations)

@@ -25,6 +25,16 @@ npm test
 
 The generator refuses to replace an existing destination. Browser tests expect fixtures in `artifacts/delta-validation` and installed Chrome/Edge. They run headless on WebGL2/WebGPU without desktop control. WebGPU comparisons read actual texture buffers.
 
+Delta analysis diagnostics (choose new output paths):
+
+```powershell
+.\.tools\dotnet\dotnet.exe run -c Release --project tools/AnimationMaker.DeltaDiagnostics -- --profile-video artifacts/validation/demo.mp4 artifacts/profile-video-gpu Gpu 0.4
+.\.tools\dotnet\dotnet.exe run -c Release --project tools/AnimationMaker.DeltaDiagnostics -- --profile artifacts/delta-validation/sparse/delta.animation.json artifacts/profile-frames-cpu Cpu 12
+.\.tools\dotnet\dotnet.exe run -c Release --project tools/AnimationMaker.DeltaDiagnostics -- --benchmark-analysis artifacts/analysis-benchmark.json
+```
+
+Replace input paths with an available video or Delta fixture. The first command exercises decode, GPU processing/shared-texture analysis, codecs and verification. The second profiles an existing decoded animation (standalone GPU mode uploads its RGBA input). The benchmark runs CPU/GPU/Auto three times on small, sparse/dense 1080p and sparse 4K samples. Its medians exclude four warmup frames and measure analysis/commit/error checking, not keying or image codecs. Use Release for comparisons. Wall-stage measurements can nest or overlap; GPU timestamp durations are reported separately. Do not sum every stage as if they were mutually exclusive. `peakProcessBytes` is the process-wide high-water mark, not incremental export memory.
+
 Read [DELTA-FORMAT.md](DELTA-FORMAT.md) before changing patch selection or playback. Preserve replacement/clear semantics, alpha transitions, independent checkpoints, old-manifest compatibility, cancellation cleanup and final-output verification. Keep C# and TypeScript validators aligned. Add focused regression tests for behavioral fixes.
 
 ## Releases

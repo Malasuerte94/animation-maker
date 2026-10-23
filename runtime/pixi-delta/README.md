@@ -4,6 +4,8 @@ In Animation Maker, click **PixiJS runtime ↓** or **Player → Download PixiJS
 
 Each normal delta export contains only `delta.animation.json` and its `delta-000.webp` (or `.png`) pages. Keep those files together and serve them as game assets. Preview local exports in Animation Maker's **Player** tab. A standalone WebP page is a texture atlas; open the JSON to play its animation.
 
+This runtime reads legacy v1 and compact v2 manifests. New app exports use v2 with numeric patch references, tight transparent bounds and denser atlas packing. Replace older runtime builds when using new exports. `asset.manifest` exposes expanded frame/patch objects for both versions; v2 does not include per-frame hashes on disk. `fromManifest` accepts either the v2 wire format (`CompactDeltaManifest`) or the expanded model (`DeltaManifest`).
+
 In a game, import `DeltaAtlasAsset` from `delta-runtime.js`, using PixiJS as a shared dependency:
 
 ```js

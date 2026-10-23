@@ -61,7 +61,8 @@ public sealed partial class MainWindow
         (r.TextureFormat == "webp" ? $"WebP {r.TextureQuality}/100 · patch tolerance {r.Tolerance}/255 · max visible error {r.MaximumVisibleError}/255 · mean {r.MeanVisibleError:0.###}/255" :
             r.Tolerance == 0 ? "Exact RGBA" : $"Approximate · tolerance {r.Tolerance}/255 · max visible error {r.MaximumVisibleError}/255 · mean {r.MeanVisibleError:0.###}/255") +
         $" · {r.UpdatedPixelPercent:0.#}% canvas updated/frame\n" +
-        $"Runtime {r.RuntimeBytes / 1024d:0.#} KiB · demo {r.DemoBytes / 1024d:0.#} KiB separately";
+        $"Runtime {r.RuntimeBytes / 1024d:0.#} KiB · demo {r.DemoBytes / 1024d:0.#} KiB separately" +
+        (r.Performance is { } p ? $"\nDelta analysis: {p.EffectiveBackend} · export {p.TotalMilliseconds / 1000:0.##} s\n{p.BackendReason}" : "");
 
     private void OnChangedRegions(object sender, RoutedEventArgs e) => DrawOverlay();
     private void DrawDeltaRegions()

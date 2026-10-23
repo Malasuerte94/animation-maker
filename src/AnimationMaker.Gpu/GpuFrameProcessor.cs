@@ -9,7 +9,7 @@ using static Vortice.Direct3D11.D3D11;
 
 namespace AnimationMaker.Gpu;
 
-public sealed class GpuFrameProcessor : IFrameProcessor
+public sealed class GpuFrameProcessor : IFrameProcessor, IDeltaAnalyzerProvider, IProfiledFrameProcessor
 {
     private readonly object _sync = new();
     private readonly ID3D11Device _device;
@@ -24,6 +24,9 @@ public sealed class GpuFrameProcessor : IFrameProcessor
     private ID3D11RenderTargetView? _backBuffer;
     private uint _viewWidth, _viewHeight;
     private string? _plateKey, _maskKey;
+    private byte[]? _lastProcessedPixels;
+    private GpuTimestamp? _frameTimer;
+    public ExportProfiler? Profiler { get; set; }
     private ShaderConstants _settings;
     public string AdapterName { get; }
     public SizeI OutputSize { get; private set; }
@@ -73,7 +76,8 @@ public sealed class GpuFrameProcessor : IFrameProcessor
         if (surface != null && surface.Width == w && surface.Height == h) return surface;
         surface?.Dispose(); surface = new(_device, w, h, floating ? Format.R16G16B16A16_Float : Format.R8G8B8A8_UNorm, render); return surface;
     }
-    private void Upload(Surface target, byte[] rgba) => _context.UpdateSubresource(rgba, target.Texture, 0, (uint)(target.Width * 4));
+    private void Upload(Surface target, byte[] rgba)
+    { _context.UpdateSubresource(rgba, target.Texture, 0, (uint)(target.Width * 4)); Profiler?.Count("rgba_upload_bytes", rgba.Length); }
     private void Draw(string entry, ID3D11RenderTargetView target, int w, int h, params ID3D11ShaderResourceView[] sources)
     {
         _context.PSSetShaderResources(0, new ID3D11ShaderResourceView[] { null!, null!, null!, null! });
@@ -89,12 +93,25 @@ public sealed class GpuFrameProcessor : IFrameProcessor
     }
     public RgbaFrame Process(RgbaFrame source, KeyerSettings keyer, IReadOnlyList<PolygonMask> masks, double time, RectI crop, SizeI output)
     {
-        lock (_sync) { Render(source, keyer, masks, time, crop, output); return Readback(); }
+        lock (_sync)
+        {
+            bool measure = Profiler != null;
+            if (measure) { _frameTimer ??= new(_device, _context); _frameTimer.Begin(); }
+            using (Profiler?.Measure("keyer_submission")) Render(source, keyer, masks, time, crop, output);
+            if (measure) _frameTimer!.End();
+            var frame = Readback();
+            if (measure && _frameTimer!.Read() is { } milliseconds) Profiler!.AddGpu("keyer", milliseconds);
+            return frame;
+        }
     }
+    public IDeltaAnalyzer CreateDeltaAnalyzer(ExportProfiler profiler)
+        => new GpuDeltaAnalyzer(_device, _context, _sync,
+            frame => ReferenceEquals(frame.Pixels, _lastProcessedPixels) ? _output?.Texture : null, profiler);
     public void Render(RgbaFrame source, KeyerSettings keyer, IReadOnlyList<PolygonMask> masks, double time, RectI crop, SizeI output)
     {
         lock (_sync)
         {
+            _lastProcessedPixels = null;
             source.Validate(); FrameGeometry.ValidateCrop(crop, source.Width, source.Height);
             if (output.Width < 1 || output.Height < 1 || output.Width > 16384 || output.Height > 16384 || source.Width > 16384 || source.Height > 16384) throw new ArgumentOutOfRangeException(nameof(output), "Direct3D texture dimensions must be between 1 and 16384 pixels.");
             var input = Ensure(ref _input, source.Width, source.Height, false, false); Upload(input, source.Pixels);
@@ -137,8 +154,13 @@ public sealed class GpuFrameProcessor : IFrameProcessor
         {
             if (_output == null) throw new InvalidOperationException("No frame has been rendered.");
             _staging ??= _device.CreateTexture2D(new Texture2DDescription(Format.R8G8B8A8_UNorm, (uint)_output.Width, (uint)_output.Height, 1, 1, BindFlags.None, ResourceUsage.Staging, CpuAccessFlags.Read));
-            _context.CopyResource(_staging, _output.Texture);
-            return ReadPixels(_staging, _output.Width, _output.Height);
+            using (Profiler?.Measure("rgba_readback"))
+            {
+                _context.CopyResource(_staging, _output.Texture);
+                var frame = ReadPixels(_staging, _output.Width, _output.Height);
+                _lastProcessedPixels = frame.Pixels; Profiler?.Count("rgba_readback_bytes", frame.Pixels.Length);
+                return frame;
+            }
         }
     }
     private RgbaFrame ReadPixels(ID3D11Texture2D staging, int width, int height)
@@ -222,7 +244,7 @@ public sealed class GpuFrameProcessor : IFrameProcessor
     {
         lock (_sync)
         {
-            _context.ClearState(); _context.Flush(); _backBuffer?.Dispose(); _swapChain?.Dispose(); _staging?.Dispose();
+            _context.ClearState(); _context.Flush(); _frameTimer?.Dispose(); _backBuffer?.Dispose(); _swapChain?.Dispose(); _staging?.Dispose();
             foreach (var surface in new[] { _input, _mask, _plate, _keyed, _refined, _horizontal, _output, _background }) surface?.Dispose();
             foreach (var shader in _shaders.Values) shader.Dispose();
             _vertex.Dispose(); _sampler.Dispose(); _constants.Dispose(); _context.Dispose(); _device.Dispose();

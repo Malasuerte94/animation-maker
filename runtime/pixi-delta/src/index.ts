@@ -5,16 +5,59 @@ export interface DeltaRect { x: number; y: number; width: number; height: number
 export interface DeltaOperation extends DeltaRect { kind: 'replace' | 'clear'; patch?: string | null }
 export interface DeltaFrame { durationMs: number; keyframe: boolean; operations: DeltaOperation[]; sha256: string }
 export interface DeltaManifest {
-    format: 'animation-maker-delta'; version: 1; width: number; height: number; fps: number;
+    format: 'animation-maker-delta'; version: 1 | 2; width: number; height: number; fps: number;
     encoding?: { mode: 'lossless' | 'bounded-error' | 'lossy'; tolerance: number; textureFormat?: 'png' | 'webp'; textureQuality?: number | null } | null;
     pages: { image: string; width: number; height: number }[];
     patches: Record<string, { page: number; rect: DeltaRect }>;
     keyframes: number[]; frames: DeltaFrame[];
 }
+/** Compact v2 wire format; the asset exposes the expanded DeltaManifest after loading. */
+export interface CompactDeltaManifest {
+    format: 'animation-maker-delta'; version: 2; width: number; height: number; fps: number;
+    encoding?: DeltaManifest['encoding'];
+    pages: [string, number, number][];
+    patches: [number, number, number, number, number][];
+    keyframes: number[]; frames: number[][];
+}
 export type FileResolver = (relative: string) => Promise<Blob>;
 const integer = (v: number, min: number, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(v) && v >= min && v <= max;
+function expand(input: DeltaManifest | CompactDeltaManifest): DeltaManifest {
+    if (!input || input.version !== 2) return input as DeltaManifest;
+    // Also accept the already expanded public asset.manifest model.
+    if (Array.isArray(input.frames) && input.frames.length && !Array.isArray(input.frames[0])) return input as DeltaManifest;
+    const m = input as CompactDeltaManifest;
+    if (!Array.isArray(m.pages) || !Array.isArray(m.patches) || !Array.isArray(m.frames) || !Array.isArray(m.keyframes)) throw Error('Invalid compact delta manifest');
+    const tuple = (v: number[], length: number) => Array.isArray(v) && v.length === length && v.every(n => integer(n, 0, 2147483647));
+    const pages = m.pages.map(p => {
+        if (!Array.isArray(p) || p.length !== 3) throw Error('Invalid compact delta page');
+        return { image: p[0], width: p[1], height: p[2] };
+    });
+    const patches: DeltaManifest['patches'] = Object.create(null);
+    m.patches.forEach((p, i) => {
+        if (!tuple(p, 5)) throw Error('Invalid compact delta patch');
+        patches[String(i)] = { page: p[0], rect: { x: p[1], y: p[2], width: p[3], height: p[4] } };
+    });
+    const keys = new Set(m.keyframes);
+    const frames = m.frames.map((values, index) => {
+        if (!Array.isArray(values) || values.length > 128 * 5 || values.some(v => !integer(v, -1, 2147483647))) throw Error('Invalid compact delta frame');
+        const operations: DeltaOperation[] = [];
+        for (let i = 0; i < values.length;) {
+            const id = values[i++], count = id === -1 ? 4 : 2;
+            if (i + count > values.length || operations.length >= 128) throw Error('Invalid compact delta operation');
+            const x = values[i++], y = values[i++];
+            if (id === -1) operations.push({ kind: 'clear', x, y, width: values[i++], height: values[i++] });
+            else {
+                const patch = patches[String(id)];
+                if (!patch) throw Error('Invalid compact patch reference');
+                operations.push({ kind: 'replace', x, y, width: patch.rect.width, height: patch.rect.height, patch: String(id) });
+            }
+        }
+        return { durationMs: 1000 / m.fps, keyframe: keys.has(index), operations, sha256: '' };
+    });
+    return { ...m, pages, patches, frames };
+}
 function validate(m: DeltaManifest): void {
-    if (!m || m.format !== 'animation-maker-delta' || m.version !== 1 || !integer(m.width, 1) || !integer(m.height, 1) || m.width * m.height > 67108864 || !Number.isFinite(m.fps) || m.fps < 1 || m.fps > 240 || !Array.isArray(m.frames) || !m.frames.length || !Array.isArray(m.pages) || !Array.isArray(m.keyframes) || !m.patches) throw Error('Unsupported delta manifest');
+    if (!m || m.format !== 'animation-maker-delta' || ![1, 2].includes(m.version) || !integer(m.width, 1) || !integer(m.height, 1) || m.width * m.height > 67108864 || !Number.isFinite(m.fps) || m.fps < 1 || m.fps > 240 || !Array.isArray(m.frames) || !m.frames.length || !Array.isArray(m.pages) || !Array.isArray(m.keyframes) || !m.patches) throw Error('Unsupported delta manifest');
     const inside = (r: DeltaRect, w: number, h: number) => r && integer(r.x, 0) && integer(r.y, 0) && integer(r.width, 1) && integer(r.height, 1) && r.x + r.width <= w && r.y + r.height <= h;
     if (m.encoding) {
         const e = m.encoding, format = e.textureFormat ?? 'png';
@@ -26,7 +69,7 @@ function validate(m: DeltaManifest): void {
     for (const p of Object.values(m.patches)) if (!p || !integer(p.page, 0, m.pages.length - 1) || !inside(p.rect, m.pages[p.page].width, m.pages[p.page].height)) throw Error('Invalid delta patch');
     const keys: number[] = []; let last = -30;
     m.frames.forEach((f, i) => {
-        if (!f || !Number.isFinite(f.durationMs) || Math.abs(f.durationMs - 1000 / m.fps) > .000001 || !Array.isArray(f.operations) || f.operations.length > 128 || typeof f.keyframe !== 'boolean' || !/^[0-9a-fA-F]{64}$/.test(f.sha256)) throw Error('Invalid delta frame');
+        if (!f || !Number.isFinite(f.durationMs) || Math.abs(f.durationMs - 1000 / m.fps) > .000001 || !Array.isArray(f.operations) || f.operations.length > 128 || typeof f.keyframe !== 'boolean' || (m.version === 1 && !/^[0-9a-fA-F]{64}$/.test(f.sha256))) throw Error('Invalid delta frame');
         if (f.keyframe) { keys.push(i); last = i; }
         if (i - last >= 30) throw Error('Missing delta checkpoint');
         for (const o of f.operations) {
@@ -70,7 +113,8 @@ export class DeltaAtlasAsset {
             if (!file) throw Error(`Missing atlas page: ${name}`); return file;
         });
     }
-    static async fromManifest(manifest: DeltaManifest, resolveFile: FileResolver): Promise<DeltaAtlasAsset> {
+    static async fromManifest(input: DeltaManifest | CompactDeltaManifest, resolveFile: FileResolver): Promise<DeltaAtlasAsset> {
+        const manifest = expand(input);
         const asset = new DeltaAtlasAsset(manifest);
         try {
             for (const p of manifest.pages) {

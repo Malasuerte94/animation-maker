@@ -1,6 +1,6 @@
 {
   "name": "@animation-maker/pixi-delta",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "type": "module",
   "private": true,
   "scripts": {

@@ -13,19 +13,19 @@ globalThis.readDeltaPixels = async function(renderer, texture) {
         buffer.unmap();return result;
     } finally {buffer.destroy();}
 };
-globalThis.runDeltaValidation = async function(backend) {
+globalThis.runDeltaValidation = async function(backend, fixtures = '/artifacts/delta-validation') {
     const { Application, ImageSource, Texture, Sprite, RenderTexture } = PIXI;
     const { DeltaAtlasAsset } = AnimationMakerDelta;
     const app = new Application(); await app.init({ preference: backend, preferWebGLVersion: 2, width: 120, height: 90, autoStart: false, resolution: 1, antialias: false, backgroundAlpha: 0 });
     if ((backend === 'webgpu' ? app.renderer.type !== 2 : app.renderer.type !== 1)) throw Error('Requested renderer unavailable: ' + app.renderer.type);
     const errors = []; if (backend === 'webgpu') app.renderer.gpu.device.addEventListener('uncapturederror', e => errors.push(e.error.message));
-    const asset = await DeltaAtlasAsset.load('/artifacts/delta-validation/sparse/delta.animation.json');
+    const asset = await DeltaAtlasAsset.load(`${fixtures}/sparse/delta.animation.json`);
     const p = asset.createPlayer(app.renderer), p2 = asset.createPlayer(app.renderer);
     const m = asset.manifest, refs = [], bitmaps = [];
     if(!m.frames.some(f=>f.operations.length>1)||!m.frames.some(f=>!f.keyframe&&!f.operations.length)||!m.frames.some(f=>!f.keyframe&&f.operations.some(o=>o.kind==='clear')))throw Error('Fixture must exercise multi-patch, hold and partial clear frames');
     const referenceTarget = RenderTexture.create({ width: m.width, height: m.height, resolution: 1, format: 'rgba8unorm', alphaMode: 'premultiplied-alpha', antialias: false });
     for (let i = 0; i < m.frames.length; i++) {
-        const bitmap = await createImageBitmap(await (await fetch(`/artifacts/delta-validation/sparse/references/${String(i).padStart(3,'0')}.png`)).blob(), { premultiplyAlpha: 'premultiply', colorSpaceConversion: 'none' });
+        const bitmap = await createImageBitmap(await (await fetch(`${fixtures}/sparse/references/${String(i).padStart(3,'0')}.png`)).blob(), { premultiplyAlpha: 'premultiply', colorSpaceConversion: 'none' });
         bitmaps.push(bitmap); refs.push(new Texture({ source: new ImageSource({ resource: bitmap, alphaMode: 'premultiplied-alpha', scaleMode: 'nearest' }) }));
     }
     const expected = new Sprite();
@@ -54,7 +54,7 @@ globalThis.runDeltaValidation = async function(backend) {
         const restored=new Promise(resolve=>{const listener={contextChange:()=>{app.renderer.runners.contextChange.remove(listener);resolve();}};app.renderer.runners.contextChange.add(listener);});
         old.destroy();await restored;p.update(0);await check(p,17);p2.update(0);await check(p2,p2.currentFrame);checks+=2;
     }
-    const emptyAsset=await DeltaAtlasAsset.load('/artifacts/delta-validation/empty/delta.animation.json');const empty=emptyAsset.createPlayer(app.renderer);
+    const emptyAsset=await DeltaAtlasAsset.load(`${fixtures}/empty/delta.animation.json`);const empty=emptyAsset.createPlayer(app.renderer);
     empty.gotoAndStop(34);if((await readDeltaPixels(app.renderer,empty.texture)).some(v=>v!==0))throw Error('Empty animation is not transparent');emptyAsset.destroy();
     const invalid=structuredClone(m);invalid.frames[0].operations=[{kind:'replace',x:0,y:0,width:1,height:1,patch:'unknown'}];
     let rejected=false;try{await DeltaAtlasAsset.fromManifest(invalid,()=>Promise.reject(Error('Unexpected page read')));}catch{rejected=true;}if(!rejected)throw Error('Malformed manifest accepted');
@@ -63,9 +63,9 @@ globalThis.runDeltaValidation = async function(backend) {
     if(errors.length)throw Error(errors.join('\n'));
     return {backend,adapter,exactRgbaComparisons:checks,checkpoints:true,contextRestoration:true,independentPlayers:true};
 };
-globalThis.runDeltaBenchmark=async function(backend) {
+globalThis.runDeltaBenchmark=async function(backend, fixtures = '/artifacts/delta-validation') {
     const app=new PIXI.Application();await app.init({preference:backend,preferWebGLVersion:2,width:1920,height:1080,autoStart:false,resolution:1,antialias:false});
-    const asset=await AnimationMakerDelta.DeltaAtlasAsset.load('/artifacts/delta-validation/benchmark/delta.animation.json');const p=asset.createPlayer(app.renderer);app.stage.addChild(p.sprite);p.play();
+    const asset=await AnimationMakerDelta.DeltaAtlasAsset.load(`${fixtures}/benchmark/delta.animation.json`);const p=asset.createPlayer(app.renderer);app.stage.addChild(p.sprite);p.play();
     const times=[],probe=new Uint8Array(4);
     for(let i=0;i<150;i++) {
         const start=performance.now();p.update(1000/30);app.renderer.render(app.stage);

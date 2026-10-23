@@ -1,6 +1,8 @@
 using AnimationMaker.Core;
 using AnimationMaker.Gpu;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Xunit;
 
 namespace AnimationMaker.Tests;
@@ -37,7 +39,7 @@ public sealed class DeltaTests
         var player = new DeltaAtlasPlayer(Path.Combine(path, "delta.animation.json"));
         Assert.Equal(frames.Count, report.VerifiedFrames); Assert.True(report.SavingsPercent > 0);
         Assert.Contains(player.Manifest.Frames, f => !f.Keyframe && f.Operations.Count == 0);
-        Assert.Contains(player.Manifest.Frames.SelectMany(f => f.Operations), o => o.Kind == "clear");
+        Assert.Contains(player.Manifest.Frames, f => f.Keyframe && f.Operations.Count == 0);
         foreach (int i in Enumerable.Range(0, frames.Count).Concat(new[] { 71, 2, 35, 0, 70, 39, 38, 37, 1 }))
             Assert.Equal(frames[i].Pixels, player.ReadFrame(i).Pixels);
         Assert.All(player.Manifest.Keyframes.Zip(player.Manifest.Keyframes.Skip(1)), pair => Assert.InRange(pair.Second - pair.First, 1, 30));
@@ -96,9 +98,12 @@ public sealed class DeltaTests
     public async Task MalformedReferencesTimingCheckpointsAndPathsAreRejected()
     {
         string path = Folder(); await DeltaAtlasExporter.ExportAsync(Sequence([Image(16, 13, 42)]), path, new() { ImageFormat = AtlasImageFormat.Png, DeltaTolerance = 0 }, 30);
-        string file = Path.Combine(path, "delta.animation.json"); var m = new DeltaAtlasPlayer(file).Manifest;
+        string file = Path.Combine(path, "delta.animation.json"); var player = new DeltaAtlasPlayer(file);
+        var m = player.Manifest with { Version = 1, Frames = player.Manifest.Frames.Select((f, i) => f with { Sha256 = Convert.ToHexString(SHA256.HashData(player.ReadFrame(i).Pixels)) }).ToList() };
+        await File.WriteAllTextAsync(file, JsonSerializer.Serialize(m, ProjectStore.JsonOptions));
+        Assert.Equal(player.ReadFrame(0).Pixels, new DeltaAtlasPlayer(file).ReadFrame(0).Pixels);
         var invalid = new[] {
-            m with { Version = 2 }, m with { Keyframes = [] }, m with { Frames = [m.Frames[0] with { DurationMs = 0 }] },
+            m with { Version = 3 }, m with { Keyframes = [] }, m with { Frames = [m.Frames[0] with { DurationMs = 0 }] },
             m with { Pages = [m.Pages[0] with { Image = "../escape.png" }] },
             m with { Frames = [m.Frames[0] with { Operations = [new("replace", 0, 0, 16, 13, "missing")] }] },
             m with { Frames = [m.Frames[0] with { Operations = [new("clear", 15, 0, 2, 13)] }] }
@@ -109,6 +114,74 @@ public sealed class DeltaTests
             Assert.Throws<InvalidDataException>(() => new DeltaAtlasPlayer(file));
         }
         await File.WriteAllTextAsync(file, "{}"); Assert.Throws<InvalidDataException>(() => new DeltaAtlasPlayer(file));
+    }
+
+    [Fact]
+    public async Task CompactManifestRemovesHashesAndRepeatedMetadataAndStillReadsLegacyV1()
+    {
+        var first = Image(48, 32, 91); string path = Folder();
+        await DeltaAtlasExporter.ExportAsync(Sequence(Enumerable.Repeat(first, 65)), path, new() { ImageFormat = AtlasImageFormat.Png, DeltaTolerance = 0 }, 29.97);
+        string file = Path.Combine(path, "delta.animation.json"), compact = await File.ReadAllTextAsync(file);
+        var player = new DeltaAtlasPlayer(file);
+        Assert.Equal(2, player.Manifest.Version);
+        Assert.DoesNotContain("sha256", compact); Assert.DoesNotContain("durationMs", compact); Assert.DoesNotContain("operations", compact);
+        var legacy = player.Manifest with { Version = 1, Frames = player.Manifest.Frames.Select((f, i) => f with { Sha256 = Convert.ToHexString(SHA256.HashData(player.ReadFrame(i).Pixels)) }).ToList() };
+        string original = JsonSerializer.Serialize(legacy, new JsonSerializerOptions(ProjectStore.JsonOptions) { WriteIndented = false });
+        Assert.True(compact.Length < original.Length / 5);
+        await File.WriteAllTextAsync(file, original);
+        var oldPlayer = new DeltaAtlasPlayer(file);
+        foreach (int i in new[] { 64, 0, 30, 29, 60 }) Assert.Equal(first.Pixels, oldPlayer.ReadFrame(i).Pixels);
+    }
+
+    [Fact]
+    public async Task CompactManifestRejectsMalformedTuplesReferencesAndCheckpoints()
+    {
+        string path = Folder();
+        await DeltaAtlasExporter.ExportAsync(Sequence([Image(16, 13, 42)]), path, new() { ImageFormat = AtlasImageFormat.Png, DeltaTolerance = 0 }, 30);
+        string file = Path.Combine(path, "delta.animation.json"), valid = await File.ReadAllTextAsync(file);
+        var mutations = new Action<JsonNode>[] {
+            m => m["pages"]![0] = new JsonArray("delta-000.png", 10),
+            m => m["patches"]![0] = new JsonArray(0, 0, 0, 16),
+            m => m["frames"]![0] = new JsonArray(99999, 0, 0),
+            m => m["frames"]![0] = new JsonArray(0, 0),
+            m => m["frames"]![0] = new JsonArray(-2, 0, 0),
+            m => m["frames"]![0] = new JsonArray(-1, 0, 0, 17, 13),
+            m => m["frames"]![0] = new JsonArray(0, -1, 0),
+            m => m["keyframes"] = new JsonArray(0, 0),
+            m => m["keyframes"] = new JsonArray(1),
+            m => m["fps"] = 0
+        };
+        foreach (var mutate in mutations)
+        {
+            var node = JsonNode.Parse(valid)!; mutate(node); await File.WriteAllTextAsync(file, node.ToJsonString());
+            Assert.Throws<InvalidDataException>(() => new DeltaAtlasPlayer(file));
+        }
+    }
+
+    [Fact]
+    public async Task SparseTransparentFramesUseTightPatchesAndCompactPagesWithoutTrails()
+    {
+        var frames = Enumerable.Range(0, 35).Select(n => {
+            var image = new RgbaFrame(320, 256, new byte[320 * 256 * 4]);
+            if (n == 18) return image;
+            foreach (var r in new[] { new RectI(12 + n * 2, 15, 13, 29), new RectI(270, 208 - n, 17, 11) })
+                for (int y = r.Y; y < r.Y + r.Height; y++) for (int x = r.X; x < r.X + r.Width; x++)
+                {
+                    int i = (y * image.Width + x) * 4;
+                    image.Pixels[i] = (byte)(n + x); image.Pixels[i + 1] = (byte)(y + n); image.Pixels[i + 3] = (byte)(1 + n * 7);
+                }
+            // Invisible RGB must survive trimming in exact mode too.
+            image.Pixels[(100 * image.Width + 130) * 4] = 17;
+            return image;
+        }).ToArray();
+        string path = Folder();
+        var report = await DeltaAtlasExporter.ExportAsync(Sequence(frames), path, new() { ImageFormat = AtlasImageFormat.Png, DeltaTolerance = 0 }, 24);
+        var player = new DeltaAtlasPlayer(Path.Combine(path, "delta.animation.json"));
+        long payloadArea = player.Manifest.Patches.Values.Sum(p => (long)p.Rect.Width * p.Rect.Height);
+        Assert.True(payloadArea < (long)320 * 256 * frames.Length / 8);
+        long slots = player.Manifest.Patches.Values.Sum(p => (long)(p.Rect.Width + 2) * (p.Rect.Height + 2));
+        Assert.True(report.AtlasPixels < slots * 1.7);
+        foreach (int i in Enumerable.Range(0, frames.Length).Concat(new[] { 34, 0, 18, 30, 17 })) Assert.Equal(frames[i].Pixels, player.ReadFrame(i).Pixels);
     }
     private sealed class InlineProgress(Action<ExportProgress> action) : IProgress<ExportProgress>
     { public void Report(ExportProgress value) => action(value); }

@@ -100,6 +100,9 @@
         <TextBlock Text="WebP / PNG RGBA + PixiJS / Phaser JSON&#10;2 px padding · 1 px edge extrusion" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap"/>
         <Button x:Name="AtlasExportButton" Content="Export spritesheet" Background="{StaticResource AccentBrush}" Foreground="#13210D" FontWeight="SemiBold" HorizontalAlignment="Stretch" Click="OnExportAtlas"/>
         <NumberBox x:Name="DeltaToleranceInput" Header="Delta tolerance · 0–32" Minimum="0" Maximum="32" Value="8" SmallChange="1" ValueChanged="OnSettingChanged"/>
+        <ComboBox x:Name="DeltaAnalysisChoice" Header="Delta analysis" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="Auto"/><ComboBoxItem Content="CPU"/><ComboBoxItem Content="GPU"/></ComboBox>
+        <TextBlock Text="Auto measures analysis speed. CPU/GPU applies to Delta analysis; keying stays GPU accelerated." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+        <TextBlock x:Name="DeltaBackendLabel" Text="Analysis backend is shown during export." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
         <TextBlock Text="0 = exact patch selection. 8 = medium tolerance for video noise. Higher values make smaller patches. WebP adds color compression; use PNG + tolerance 0 for exact RGBA." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
         <Button x:Name="DeltaPreviewButton" Content="Preview delta · 1 second" HorizontalAlignment="Stretch" Click="OnPreviewDelta"/>
         <Button x:Name="DeltaExportButton" Content="Export Delta Animation · BETA" HorizontalAlignment="Stretch" Click="OnExportDelta"/>
