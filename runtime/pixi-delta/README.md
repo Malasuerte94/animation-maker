@@ -46,3 +46,20 @@ Use the app’s Delta tolerance control and Preview delta · 1 second to compare
 
 The export summary in Animation Maker reports animation size and quality. A smaller export is not guaranteed for every clip. Older diagnostic/demo bundles with `delta.report.json` remain readable. The optional developer demo runs offline using the folder picker; it is separate from the plugin and normal exports.
 PixiJS and this runtime are MIT licensed. The runtime license is included in the ZIP; PixiJS is supplied by your game.
+
+## MP4 RGB + Alpha demo
+
+The demo uses one video texture and a PixiJS 8 WebGL mesh. The shader reads RGB from the left half and opacity from the matching pixel in the right half. The MP4 uses standard H.264 video, so standard video players display both halves.
+
+Run these commands from `runtime/pixi-delta` in the Animation Maker source checkout after setting up the repository.
+
+```powershell
+npm.cmd run build
+node tests/server.mjs
+```
+
+Open [the local MP4 demo](http://127.0.0.1:8869/runtime/pixi-delta/dist/packed-mp4.html). Choose a file and press **Play**. Use **Logical width** and **Logical height** if the original export canvas was odd-sized. Otherwise the demo uses half the encoded width and the full encoded height. The right half starts at exactly half the encoded width, including any padding on the color side.
+
+To test on a phone, serve `dist/packed-mp4.html`, `dist/packed-mp4.js` and `dist/vendor/pixi.min.js` from a static host the phone can reach, keeping the same directory structure. Open the page there and choose an MP4 from the phone.
+
+Use `createPackedMp4Mesh(PIXI, video, { width, height })` from [packed-mp4.js](packed-mp4.js) in a PixiJS 8 application initialized with `preference: 'webgl'`. Pass a video after `canplay`, add the returned `mesh` to the stage and control the video through its regular `play()` and `pause()` methods. Call the returned `destroy()` when replacing the video. For mobile playback, set `video.playsInline = true` and start it from a user gesture. The demo plays muted.

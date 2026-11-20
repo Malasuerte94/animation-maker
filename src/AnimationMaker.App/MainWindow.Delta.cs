@@ -30,7 +30,7 @@ public sealed partial class MainWindow
         string? lastExport = _lastExport;
         try
         {
-            await RunExportAsync(false, path, delta: true, exportProject: previewProject);
+            await RunExportAsync(ExportKind.Delta, path, exportProject: previewProject);
             if (!_closed && File.Exists(System.IO.Path.Combine(path, "delta.animation.json"))) await PlayLastExportAsync();
         }
         finally
@@ -50,7 +50,7 @@ public sealed partial class MainWindow
         string name = System.IO.Path.GetFileNameWithoutExtension(_project.SourcePath) + "_delta";
         string path = System.IO.Path.Combine(folder.Path, name); int suffix = 2;
         while (Directory.Exists(path) || File.Exists(path)) path = System.IO.Path.Combine(folder.Path, name + "_" + suffix++);
-        await RunExportAsync(false, path, delta: true);
+        await RunExportAsync(ExportKind.Delta, path);
     });
 
     private static string DeltaSummary(DeltaReport r) =>

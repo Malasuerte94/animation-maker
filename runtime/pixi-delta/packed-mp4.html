@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MP4 RGB + Alpha player</title>
+<link rel="icon" href="data:,">
+<style>
+    * { box-sizing: border-box; }
+    body { margin: 0 auto; padding: 1rem; max-width: 65rem; font: 1rem system-ui, sans-serif; color: #f1f5f9; background: #101820; }
+    h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: end; }
+    label { display: grid; gap: .35rem; }
+    button, input, select { font: inherit; min-height: 2.25rem; }
+    input[type="number"] { width: 6rem; }
+    #status { min-height: 1.5em; color: #c4cfdb; }
+    #preview { height: min(65vh, 38rem); border: 1px solid #667482; }
+    #preview[data-background="checker"] { background: repeating-conic-gradient(#35414d 0% 25%, #202b37 0% 50%) 0 0 / 32px 32px; }
+    #preview[data-background="white"] { background: white; }
+    #preview[data-background="black"] { background: black; }
+    canvas { display: block; }
+</style>
+<h1>MP4 RGB + Alpha player</h1>
+<div class="controls">
+    <label>MP4 file <input id="file" type="file" accept="video/mp4,.mp4"></label>
+    <button id="play" type="button" disabled>Play</button>
+    <label>Logical width <input id="width" type="number" min="1" step="1" placeholder="Auto"></label>
+    <label>Logical height <input id="height" type="number" min="1" step="1" placeholder="Auto"></label>
+    <label>Background
+        <select id="background">
+            <option value="checker">Checkerboard</option>
+            <option value="white">White</option>
+            <option value="black">Black</option>
+        </select>
+    </label>
+</div>
+<p id="status" role="status">Choose an MP4 with color on the left and the alpha mask on the right.</p>
+<div id="preview" data-background="checker"></div>
+<script src="vendor/pixi.min.js"></script>
+<script type="module">
+    import { createPackedMp4Mesh } from './packed-mp4.js';
+
+    const file = document.getElementById('file');
+    const play = document.getElementById('play');
+    const width = document.getElementById('width');
+    const height = document.getElementById('height');
+    const status = document.getElementById('status');
+    const preview = document.getElementById('preview');
+    const app = new PIXI.Application();
+    await app.init({ preference: 'webgl', backgroundAlpha: 0, resizeTo: preview });
+    preview.append(app.canvas);
+
+    let current;
+    function fit() {
+        if (!current?.player) return;
+        const { mesh } = current.player;
+        const bounds = mesh.getLocalBounds();
+        const scale = Math.min(app.screen.width / bounds.width, app.screen.height / bounds.height);
+        mesh.scale.set(scale);
+        mesh.position.set((app.screen.width - bounds.width * scale) / 2, (app.screen.height - bounds.height * scale) / 2);
+    }
+    app.renderer.on('resize', fit);
+
+    function logicalSize() {
+        return { width: width.value ? width.valueAsNumber : undefined, height: height.value ? height.valueAsNumber : undefined };
+    }
+
+    function updateSize() {
+        if (!current?.player) return;
+        try {
+            current.player.setLogicalSize(logicalSize());
+            fit();
+            const bounds = current.player.mesh.getLocalBounds();
+            status.textContent = `${bounds.width} × ${bounds.height} px · ${current.video.duration.toFixed(2)} s`;
+        } catch (error) { status.textContent = error.message; }
+    }
+    width.addEventListener('change', updateSize);
+    height.addEventListener('change', updateSize);
+    document.getElementById('background').addEventListener('change', event => {
+        preview.dataset.background = event.target.value;
+    });
+
+    file.addEventListener('change', () => {
+        if (!file.files.length) return;
+        if (current) {
+            const previous = current;
+            current = undefined;
+            previous.player?.destroy();
+            if (!previous.player) {
+                previous.video.pause();
+                previous.video.removeAttribute('src');
+                previous.video.load();
+            }
+            URL.revokeObjectURL(previous.url);
+        }
+        const video = document.createElement('video');
+        video.preload = 'auto';
+        video.playsInline = true;
+        video.muted = true;
+        video.loop = true;
+        const url = URL.createObjectURL(file.files[0]);
+        const selection = { video, url };
+        current = selection;
+        status.textContent = 'Loading video…';
+        play.textContent = 'Play';
+        play.disabled = false;
+        video.addEventListener('error', () => {
+            if (current !== selection) return;
+            play.disabled = true;
+            status.textContent = 'The browser could not load this video.';
+        });
+        video.addEventListener('canplay', async () => {
+            if (current !== selection) return;
+            try {
+                const player = await createPackedMp4Mesh(PIXI, video);
+                if (current !== selection) { player.destroy(); return; }
+                selection.player = player;
+                app.stage.addChild(player.mesh);
+                fit();
+                updateSize();
+            } catch (error) {
+                if (current === selection) status.textContent = error.message;
+            }
+        }, { once: true });
+        video.src = url;
+    });
+
+    play.addEventListener('click', async () => {
+        const selection = current;
+        if (!selection) return;
+        try {
+            if (selection.video.paused) await selection.video.play();
+            else selection.video.pause();
+            if (current === selection) play.textContent = selection.video.paused ? 'Play' : 'Pause';
+        } catch (error) {
+            if (current === selection) status.textContent = error.message;
+        }
+    });
+</script>
+</html>

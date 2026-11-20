@@ -64,7 +64,7 @@
             <TextBlock Text="Drop an MP4, MOV, WebM or exported atlas&#10;—or use Open media above" TextAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="13" HorizontalAlignment="Center"/>
             <Border Background="#1C2935" CornerRadius="6" Padding="12,7" HorizontalAlignment="Center"><TextBlock Text="LOCAL PROCESSING  ·  GPU ACCELERATED" FontSize="10" CharacterSpacing="70" Foreground="{StaticResource MutedBrush}"/></Border>
           </StackPanel>
-          <Border x:Name="PickBanner" Background="#E022321A" CornerRadius="6" Padding="12,8" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="12" Visibility="Collapsed"><TextBlock Text="Click the green screen to sample its color · Esc cancels" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Border>
+          <Border x:Name="PickBanner" Background="#E022321A" CornerRadius="6" Padding="12,8" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="12" Visibility="Collapsed"><TextBlock Text="Click the background to sample its color · Esc cancels" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Border>
           <Border x:Name="CropBanner" Background="#DF162531" CornerRadius="6" Padding="12,8" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="12" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock Text="Drag handles to resize · drag inside to move · Enter / Esc finishes" TextWrapping="Wrap" FontSize="11"/></Border>
         </Grid>
       </Border>
@@ -108,10 +108,12 @@
         <Button x:Name="DeltaExportButton" Content="Export Delta Animation · BETA" HorizontalAlignment="Stretch" Click="OnExportDelta"/>
         <TextBlock Text="Exports WebP/PNG pages + delta.animation.json. Download the PixiJS runtime separately with the button above. Use Player to test exports." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
         <Border Height="1" Background="{StaticResource StrokeBrush}"/>
-        <TextBlock Text="WEBM + ALPHA" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" CharacterSpacing="70"/>
-        <ComboBox x:Name="VideoQualityChoice" Header="VP9 encoding" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="High quality"/><ComboBoxItem Content="Balanced"/><ComboBoxItem Content="Smaller file"/><ComboBoxItem Content="Lossless encoding"/></ComboBox>
-        <CheckBox x:Name="IncludeAudio" Content="Keep audio · Opus" Checked="OnSettingChanged" Unchecked="OnSettingChanged"/>
+        <TextBlock Text="VIDEO EXPORT" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" CharacterSpacing="70"/>
+        <ComboBox x:Name="VideoQualityChoice" Header="Video quality" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="High quality"/><ComboBoxItem Content="Balanced"/><ComboBoxItem Content="Smaller file"/><ComboBoxItem Content="Lossless (WebM only)"/></ComboBox>
+        <CheckBox x:Name="IncludeAudio" Content="Keep audio" Checked="OnSettingChanged" Unchecked="OnSettingChanged"/>
         <Button x:Name="WebmExportButton" Content="Export transparent WebM" HorizontalAlignment="Stretch" Click="OnExportWebm"/>
+        <Button x:Name="PackedMp4ExportButton" Content="Export MP4 · RGB + Alpha" HorizontalAlignment="Stretch" Click="OnExportPackedMp4"/>
+        <TextBlock Text="MP4 stores color on the left and the alpha mask on the right. Use Player or a compatible shader to combine them." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
         </StackPanel></UserControl>
         <ProgressBar x:Name="ExportProgressBar" Minimum="0" Maximum="100" Visibility="Collapsed"/>
         <TextBlock x:Name="ExportStage" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
@@ -155,6 +157,7 @@
           <Button Content="Open exported file…" Click="OnOpenPlayerFile" HorizontalAlignment="Stretch" Background="{StaticResource AccentBrush}" Foreground="#13210D" FontWeight="SemiBold"/>
           <Button Content="Open export folder…" Click="OnOpenPlayerFolder" HorizontalAlignment="Stretch"/>
           <TextBlock x:Name="PlayerInfoLabel" Text="Open delta.animation.json or animation.json to play the animation. A WebP/PNG page on its own opens as an image." FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+          <CheckBox x:Name="PlayerPackedAlpha" Content="Interpret as RGB + Alpha" Visibility="Collapsed" Checked="OnPlayerPackedAlphaChanged" Unchecked="OnPlayerPackedAlphaChanged"/>
           <Border Height="1" Background="{StaticResource StrokeBrush}"/>
           <NumberBox x:Name="PlayerFreezeFrame" Header="Freeze at frame · starts at 0" Minimum="0" Maximum="0" Value="0" SmallChange="1" IsEnabled="False" ValueChanged="OnPlayerFreezeFrameChanged"/>
           <TextBlock Text="Scrub or enter a frame to pause there. Space plays/pauses; arrow keys step one frame." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>

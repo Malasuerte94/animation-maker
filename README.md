@@ -1,6 +1,6 @@
 # Animation Maker
 
-Turn video into transparent animations for games and the web. Remove a green screen, refine alpha edges, crop and mask the result, then export a classic spritesheet, transparent WebM, or **beta delta animation for PixiJS**.
+Turn video into transparent animations for games and the web. Remove a colored background, refine alpha edges, crop and mask the result, then export a classic spritesheet, transparent WebM, MP4 with a side-by-side alpha mask, or **beta delta animation for PixiJS**.
 
 Windows desktop application. Local processing. GPU accelerated keying. **MIT licensed application and PixiJS runtime.**
 
@@ -20,11 +20,12 @@ The Windows packages include .NET, WinUI and FFmpeg. End users do not need Node.
 
 ## Features
 
-- GPU green-screen removal with Quality/Fast modes, color sampling, clean plate, despill, clip controls, choke and feather.
+- GPU removal of green, blue, magenta and other solid backgrounds with Quality/Fast modes, color sampling, clean plate, despill, clip controls, choke and feather.
 - Keep/Remove polygon masks with interpolated keyframes; visual crop, trim, frame rate and output-height controls.
 - Packed/trimmed or grid spritesheets with PixiJS and Phaser JSON, deduplication, multiple pages and edge extrusion.
 - WebP atlas quality **1–100**, default **75 (medium)**; PNG for lossless images.
 - Transparent VP9 WebM with optional Opus audio.
+- H.264 MP4 with color on the left and a grayscale alpha mask on the right, with optional AAC audio.
 - **Delta Animation BETA** with reusable patches and a separate PixiJS runtime.
 - **Delta analysis: Auto / CPU / GPU** with DirectCompute acceleration, measured backend selection and CPU fallback.
 - Independent **Player** tab, project save/load, Undo/Redo, alpha/checkerboard/photo backgrounds and zoom.
@@ -32,13 +33,13 @@ The Windows packages include .NET, WinUI and FFmpeg. End users do not need Node.
 ## Quick start
 
 1. In **Editor**, open or drop an MP4, MOV or WebM.
-2. Use **Auto sample green** or pick the screen color. Adjust the matte and inspect edges over white, black, magenta and **Alpha matte**. Use **Full resolution** to judge final edges.
+2. Use **Auto sample green** for green backgrounds or sample any screen color with the eyedropper. Adjust the matte and inspect edges over white, black, magenta and **Alpha matte**. Use **Full resolution** to judge final edges.
 3. Set the in/out range, frame rate and maximum frame height. Add crop or masks if needed.
 4. Choose **WebP** and an image quality, or **PNG** for lossless images.
-5. Export a spritesheet, transparent WebM, or **Delta Animation · BETA**.
+5. Export a spritesheet, transparent WebM, **MP4 · RGB + Alpha**, or **Delta Animation · BETA**.
 6. Use **Play last export** or open the export folder in **Player**. Your Editor session stays available in its own tab.
 
-Player supports play/pause, loop, 0.25–2× speed, scrub, frame stepping, backgrounds and zoom. Enter a zero-based frame in **Freeze at frame** to stop there. Space toggles playback; arrow keys step one frame. Open the animation JSON to play an atlas; a WebP page alone is a still image. Video previews are silent; WebM exports can retain audio.
+Player supports play/pause, loop, 0.25–2× speed, scrub, frame stepping, backgrounds and zoom. Enter a zero-based frame in **Freeze at frame** to stop there. Space toggles playback; arrow keys step one frame. Open the animation JSON to play an atlas; a WebP page alone is a still image. Video previews are silent. WebM and MP4 exports can retain audio.
 
 ## Delta Animation for PixiJS — BETA
 
@@ -149,6 +150,10 @@ The delta format, exporter and runtime are beta. New exports use v2; install the
 Classic exports include `atlas-000.webp` (or `.png`), TexturePacker Hash JSON, `animation.json` for timing/order and `phaser.json` for `load.multiatlas`. Packed layout trims alpha and can reuse identical frames; grid layout keeps complete frames in row-major order. Page limits are 2048, 4096 or 8192 pixels.
 
 WebM uses VP9 with alpha, High/Balanced/Small/Lossless presets and optional Opus audio. The lossless video preset can still involve RGB/YUV conversion; PNG is the exact image option.
+
+**MP4 · RGB + Alpha** uses H.264 to store each frame's color on the left and its opacity on the right. Black is transparent, white is opaque and shades of gray preserve partial opacity. A standard video player shows both halves. Animation Maker's **Player** combines them automatically for its own exports. Use **Interpret as RGB + Alpha** for an external MP4 that uses the same layout. The High/Balanced/Small presets trade size for quality, and selecting WebM's Lossless preset uses High for MP4.
+
+For PixiJS 8 integration, see the [MP4 shader and demo instructions](runtime/pixi-delta/README.md#mp4-rgb--alpha-demo).
 
 **Crop canvas** supports numerical edits and drag handles. **Keep** masks protect foreground, including green details; **Remove** masks erase areas. Add keyframes by editing a mask at another time. **Image…** adds a Fill/Fit photo behind the preview without altering exports. `.animproj` stores settings and relative source references.
 

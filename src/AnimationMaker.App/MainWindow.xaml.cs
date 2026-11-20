@@ -255,7 +255,7 @@ public sealed partial class MainWindow : Window
         OpenButton.IsEnabled = !busy;
         WorkspaceTabs.IsEnabled = !busy;
         SaveButton.IsEnabled = KeyingPanel.IsEnabled = ExportSettingsPanel.IsEnabled = canEdit;
-        AtlasExportButton.IsEnabled = DeltaExportButton.IsEnabled = DeltaPreviewButton.IsEnabled = WebmExportButton.IsEnabled = SetInButton.IsEnabled = SetOutButton.IsEnabled = canEdit;
+        AtlasExportButton.IsEnabled = DeltaExportButton.IsEnabled = DeltaPreviewButton.IsEnabled = WebmExportButton.IsEnabled = PackedMp4ExportButton.IsEnabled = SetInButton.IsEnabled = SetOutButton.IsEnabled = canEdit;
         TimelinePanel.IsEnabled = _info != null && !busy;
         OpenExportButton.IsEnabled = !busy && _lastExport != null && !_showingExport;
         UndoButton.IsEnabled = canEdit && _history.CanUndo; RedoButton.IsEnabled = canEdit && _history.CanRedo;
@@ -557,15 +557,24 @@ public sealed partial class MainWindow : Window
         var picker = new FolderPicker(); picker.FileTypeFilter.Add("*"); InitializePicker(picker); var folder = await picker.PickSingleFolderAsync(); if (folder == null) return;
         string name = System.IO.Path.GetFileNameWithoutExtension(_project.SourcePath) + "_atlas"; string path = System.IO.Path.Combine(folder.Path, name); int suffix = 2;
         while (Directory.Exists(path) || File.Exists(path)) path = System.IO.Path.Combine(folder.Path, name + "_" + suffix++);
-        await RunExportAsync(false, path);
+        await RunExportAsync(ExportKind.Atlas, path);
     });
-    private async void OnExportWebm(object sender, RoutedEventArgs e) => await Guard(async () =>
+    private enum ExportKind { Atlas, Delta, Webm, PackedMp4 }
+
+    private async void OnExportWebm(object sender, RoutedEventArgs e) => await Guard(() => PickVideoExportAsync(ExportKind.Webm));
+    private async void OnExportPackedMp4(object sender, RoutedEventArgs e) => await Guard(() => PickVideoExportAsync(ExportKind.PackedMp4));
+
+    private async Task PickVideoExportAsync(ExportKind kind)
     {
         if (_info == null || _atlas != null) return; StopPlayback(); _settingsTimer?.Stop(); if (!CommitControls()) return;
-        var picker = new FileSavePicker { SuggestedFileName = System.IO.Path.GetFileNameWithoutExtension(_project.SourcePath) + "_alpha" }; picker.FileTypeChoices.Add("Transparent WebM", [".webm"]); InitializePicker(picker);
-        if (await picker.PickSaveFileAsync() is { } file) await RunExportAsync(true, file.Path);
-    });
-    private async Task RunExportAsync(bool webm, string destination, bool delta = false, ProjectDocument? exportProject = null)
+        bool mp4 = kind == ExportKind.PackedMp4;
+        var picker = new FileSavePicker { SuggestedFileName = System.IO.Path.GetFileNameWithoutExtension(_project.SourcePath) + (mp4 ? "_rgb_alpha" : "_alpha") };
+        picker.FileTypeChoices.Add(mp4 ? "MP4 · RGB + Alpha" : "Transparent WebM", [mp4 ? ".mp4" : ".webm"]);
+        InitializePicker(picker);
+        if (await picker.PickSaveFileAsync() is { } file) await RunExportAsync(kind, file.Path);
+    }
+
+    private async Task RunExportAsync(ExportKind kind, string destination, ProjectDocument? exportProject = null)
     {
         if (_ffmpeg == null || _info == null || _exportCts != null) return;
         EndCropEditing(); RequestPreview();
@@ -576,11 +585,25 @@ public sealed partial class MainWindow : Window
             var progress = new Progress<ExportProgress>(p => { ExportProgressBar.Value = p.Fraction * 100; ExportStage.Text = $"{p.Stage} · {p.Completed} / {p.Total}"; StatusLabel.Text = ExportStage.Text; if (p.Stage.StartsWith("Delta analysis ·", StringComparison.Ordinal)) DeltaBackendLabel.Text = p.Stage; });
             var service = new ExportService(_ffmpeg, () => new GpuFrameProcessor());
             DeltaReport? report = null;
-            if (delta) report = await Task.Run(() => service.ExportDeltaAtlasAsync(project, info, destination, progress, ct), ct);
-            else await Task.Run(() => webm ? service.ExportWebmAsync(project, info, destination, progress, ct) : service.ExportAtlasAsync(project, info, destination, progress, ct), ct);
+            await Task.Run(async () =>
+            {
+                switch (kind)
+                {
+                    case ExportKind.Atlas: await service.ExportAtlasAsync(project, info, destination, progress, ct); break;
+                    case ExportKind.Delta: report = await service.ExportDeltaAtlasAsync(project, info, destination, progress, ct); break;
+                    case ExportKind.Webm: await service.ExportWebmAsync(project, info, destination, progress, ct); break;
+                    case ExportKind.PackedMp4: await service.ExportPackedMp4Async(project, info, destination, progress, ct); break;
+                }
+            }, ct);
             if (report?.Performance is { } performance) App.LogMessage("Delta export performance: " + System.Text.Json.JsonSerializer.Serialize(performance, ProjectStore.JsonOptions));
             if (report?.Performance is { } selected) DeltaBackendLabel.Text = $"Delta analysis · {selected.EffectiveBackend} · {selected.BackendReason}";
-            _lastExport = webm ? destination : System.IO.Path.Combine(destination, delta ? "delta.animation.json" : "animation.json"); StatusLabel.Text = "Export complete · " + destination;
+            _lastExport = kind switch
+            {
+                ExportKind.Atlas => System.IO.Path.Combine(destination, "animation.json"),
+                ExportKind.Delta => System.IO.Path.Combine(destination, "delta.animation.json"),
+                _ => destination
+            };
+            StatusLabel.Text = "Export complete · " + destination;
             ExportStage.Text = report == null ? "Export complete · ready to play" : DeltaSummary(report); OpenExportButton.IsEnabled = true;
         }
         catch (OperationCanceledException) { StatusLabel.Text = "Export cancelled · temporary files removed"; ExportStage.Text = "Cancelled"; }

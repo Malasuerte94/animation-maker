@@ -22,7 +22,7 @@ public sealed partial class MainWindow
     private readonly SemaphoreSlim _playerRenderGate = new(1, 1);
     private CancellationTokenSource _playerSourceCts = new();
     private CancellationTokenSource? _playerSeekCts, _playerPlaybackCts;
-    private sealed record PlayerMedia(string Path, VideoInfo Info, IAnimationSource? Source, int FrameCount);
+    private sealed record PlayerMedia(string Path, VideoInfo Info, IAnimationSource? Source, int FrameCount, SizeI? PackedAlphaSize);
     private sealed class PlayerImage(RgbaFrame frame) : IAnimationSource
     {
         public AnimationInfo Info { get; } = new(frame.Width, frame.Height, 1, [1000]);
@@ -128,11 +128,37 @@ public sealed partial class MainWindow
         ct.ThrowIfCancellationRequested();
         int frameCount = source?.Info.FrameCount ?? FrameGeometry.FrameCount(0, info.Duration, info.Fps);
         if (frameCount <= 0) throw new InvalidDataException("The export contains no frames.");
-        _playerMedia = new(path, info, source, frameCount); _playerFrame = 0;
+        _playerMedia = new(path, info, source, frameCount, info.PackedAlphaSize); _playerFrame = 0;
         PlayerTitle.Text = System.IO.Path.GetFileName(path);
-        string kind = source is DeltaAtlasPlayer ? "Delta animation" : source is AtlasPlayer ? "Spritesheet animation" : source is PlayerImage ? "Image / atlas page" : "Video";
-        PlayerInfoLabel.Text = $"{kind}\n{info.Width} × {info.Height} px\n{frameCount} frames · {info.Fps:0.###} fps\n{info.Duration:0.###} seconds";
-        if (source is DeltaAtlasPlayer delta)
+        UpdatePlayerInfo(_playerMedia);
+        _playerUpdating = true;
+        try
+        {
+            PlayerPackedAlpha.IsChecked = info.PackedAlphaSize.HasValue;
+            PlayerPackedAlpha.Visibility = extension == ".mp4" && !info.PackedAlphaSize.HasValue && info.Width % 2 == 0
+                ? Visibility.Visible : Visibility.Collapsed;
+            PlayerPositionSlider.Maximum = Math.Max(1, frameCount - 1);
+            PlayerFreezeFrame.Maximum = frameCount - 1;
+        }
+        finally { _playerUpdating = false; }
+        PlayerTransport.IsEnabled = PlayerFreezeFrame.IsEnabled = true; PlayerEmptyState.Visibility = Visibility.Collapsed;
+        await SeekPlayerAsync(0);
+        StatusLabel.Text = "Player ready · " + path;
+    }
+
+    private void UpdatePlayerInfo(PlayerMedia media)
+    {
+        var info = media.Info;
+        string kind = media.Source switch
+        {
+            DeltaAtlasPlayer => "Delta animation",
+            AtlasPlayer => "Spritesheet animation",
+            PlayerImage => "Image / atlas page",
+            _ => media.PackedAlphaSize.HasValue ? "MP4 · RGB + Alpha" : "Video"
+        };
+        var size = media.PackedAlphaSize ?? new SizeI(info.Width, info.Height);
+        PlayerInfoLabel.Text = $"{kind}\n{size.Width} × {size.Height} px\n{media.FrameCount} frames · {info.Fps:0.###} fps\n{info.Duration:0.###} seconds";
+        if (media.Source is DeltaAtlasPlayer delta)
         {
             var encoding = delta.Manifest.Encoding;
             PlayerInfoLabel.Text += $"\n{delta.Manifest.Pages.Count} pages · {delta.Manifest.Patches.Count} unique patches\n" +
@@ -140,17 +166,20 @@ public sealed partial class MainWindow
             if (delta.Report is { } report) PlayerInfoLabel.Text += "\n\n" + DeltaSummary(report);
         }
         if (info.HasAudio) PlayerInfoLabel.Text += "\nSilent preview";
-        _playerUpdating = true;
-        try { PlayerPositionSlider.Maximum = Math.Max(1, frameCount - 1); PlayerFreezeFrame.Maximum = frameCount - 1; }
-        finally { _playerUpdating = false; }
-        PlayerTransport.IsEnabled = PlayerFreezeFrame.IsEnabled = true; PlayerEmptyState.Visibility = Visibility.Collapsed;
-        await SeekPlayerAsync(0);
-        StatusLabel.Text = "Player ready · " + path;
+    }
+
+    private async void OnPlayerPackedAlphaChanged(object sender, RoutedEventArgs e)
+    {
+        if (_playerUpdating || _playerMedia is not { } media || PlayerPackedAlpha.Visibility != Visibility.Visible) return;
+        SizeI? size = PlayerPackedAlpha.IsChecked == true ? new SizeI(media.Info.Width / 2, media.Info.Height) : null;
+        _playerMedia = media with { PackedAlphaSize = size };
+        UpdatePlayerInfo(_playerMedia);
+        await Guard(() => SeekPlayerAsync(_playerFrame));
     }
 
     private async Task<RgbaFrame> ReadPlayerFrameAsync(PlayerMedia media, int index, CancellationToken ct) => media.Source != null
         ? await Task.Run(() => media.Source.ReadFrame(index, ct), ct)
-        : await _ffmpeg!.ReadFrameAsync(media.Path, media.Info, index / media.Info.Fps, 16384, ct);
+        : await _ffmpeg!.ReadFrameAsync(media.Path, media.Info, index / media.Info.Fps, media.PackedAlphaSize.HasValue ? media.Info.Height : 16384, ct);
 
     private async Task DisplayPlayerFrameAsync(PlayerMedia media, int index, RgbaFrame frame, long version, CancellationToken ct)
     {
@@ -159,8 +188,12 @@ public sealed partial class MainWindow
         {
             ct.ThrowIfCancellationRequested();
             if (_closed || version != _playerRenderVersion || _playerMedia != media) return;
-            await Task.Run(() => _playerGpu!.Render(frame, new() { Enabled = false }, [], index / media.Info.Fps,
-                new(0, 0, frame.Width, frame.Height), new(frame.Width, frame.Height)), ct);
+            await Task.Run(() =>
+            {
+                if (media.PackedAlphaSize is { } size) frame = PackedAlphaVideo.Unpack(frame, size);
+                _playerGpu!.Render(frame, new() { Enabled = false }, [], index / media.Info.Fps,
+                    new(0, 0, frame.Width, frame.Height), new(frame.Width, frame.Height));
+            }, ct);
             ct.ThrowIfCancellationRequested();
             if (_closed || version != _playerRenderVersion || _playerMedia != media) return;
             _playerFrame = index; _playerUpdating = true;
@@ -211,7 +244,8 @@ public sealed partial class MainWindow
                         if (media.Source != null)
                             for (int i = start; i < media.FrameCount; i++) yield return await Task.Run(() => media.Source.ReadFrame(i, token), token);
                         else
-                            await foreach (var image in _ffmpeg!.DecodeAsync(media.Path, media.Info, start / media.Info.Fps, media.Info.Duration, media.Info.Fps, 16384, false, token)) yield return image;
+                            await foreach (var image in _ffmpeg!.DecodeAsync(media.Path, media.Info, start / media.Info.Fps, media.Info.Duration, media.Info.Fps,
+                                media.PackedAlphaSize.HasValue ? media.Info.Height : 16384, false, token)) yield return image;
                     }
                     await foreach (var image in frames(ct))
                     {

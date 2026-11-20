@@ -126,7 +126,10 @@ public sealed record ProjectDocument
     }
 }
 
-public sealed record VideoInfo(int Width, int Height, double Duration, double Fps, bool HasAudio, bool HasAlpha, string CodecName = "");
+public sealed record VideoInfo(int Width, int Height, double Duration, double Fps, bool HasAudio, bool HasAlpha, string CodecName = "")
+{
+    public SizeI? PackedAlphaSize { get; init; }
+}
 public sealed record RgbaFrame(int Width, int Height, byte[] Pixels)
 {
     public long ByteLength => Pixels.LongLength;

@@ -66,6 +66,24 @@ public sealed class PipelineTests
         result = gpu.Process(green, settings, [], 0, new(0, 0, 64, 32), new(64, 32));
         Assert.All(result.Pixels, value => Assert.Equal(0, value));
     }
+    [Fact]
+    public void GpuKeysMagentaAndPreservesGreenAndPartialAlpha()
+    {
+        using var gpu = new GpuFrameProcessor();
+        var settings = new KeyerSettings { ScreenColor = "#FF00FF", ClipBlack = 0, ClipWhite = 1 };
+        var crop = new RectI(0, 0, 64, 32);
+        var size = new SizeI(64, 32);
+        var background = Solid(64, 32, 255, 0, 255);
+        Assert.Equal(0, gpu.Process(background, settings, [], 0, crop, size).Pixels[3]);
+
+        var green = Solid(64, 32, 0, 255, 0);
+        Assert.Equal(new byte[] { 0, 255, 0, 255 }, gpu.Process(green, settings, [], 0, crop, size).Pixels[..4]);
+
+        var edge = Solid(64, 32, 255, 128, 255);
+        var partial = gpu.Process(edge, settings with { Similarity = 0, Softness = .60f }, [], 0, crop, size);
+        Assert.InRange((int)partial.Pixels[3], 115, 140);
+        Assert.InRange((int)partial.Pixels[1], 245, 255);
+    }
     [Theory]
     [InlineData(0f)]
     [InlineData(.5f)]

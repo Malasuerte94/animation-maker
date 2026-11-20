@@ -34,8 +34,11 @@ float4 KeyPS(Vertex v) : SV_Target {
     bool blue = bg.b > bg.g;
     float3 color = blue ? original.rbg : original.rgb;
     float3 screen = blue ? bg.rbg : bg;
-    if (Key.x > .5) {
+    bool dominantScreen = screen.g - max(screen.r, screen.b) > .05;
+    if (Key.x > .5 || !dominantScreen) {
         float distance = length(Chroma(original.rgb) - Chroma(bg));
+        if (max(bg.r, max(bg.g, bg.b)) - min(bg.r, min(bg.g, bg.b)) < .05)
+            distance = length(original.rgb - bg) * .57735;
         alpha = smoothstep(Key.y, Key.y + max(Key.z, .0001), distance);
     } else {
         float denominator = max(screen.g - screen.r * Matte.z - screen.b * Matte.w, .0001);
@@ -48,7 +51,7 @@ float4 KeyPS(Vertex v) : SV_Target {
     float3 foreground = lerp(original.rgb, max(original.rgb - (1 - rawAlpha) * bg, 0) / max(rawAlpha, .0001), Key.w);
     if (rawAlpha < .0001) foreground = 0;
     float3 spillColor = blue ? foreground.rbg : foreground;
-    float excess = max(0, spillColor.g - max(spillColor.r, spillColor.b));
+    float excess = dominantScreen ? max(0, spillColor.g - max(spillColor.r, spillColor.b)) : 0;
     float before = dot(spillColor, float3(.2126, .7152, .0722));
     spillColor.g -= excess * Key.w;
     float after = dot(spillColor, float3(.2126, .7152, .0722));
