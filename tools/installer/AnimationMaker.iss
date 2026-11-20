@@ -12,7 +12,7 @@
 AppId={{58B579D7-92D1-4EF2-8266-868070DE4E09}
 AppName=Animation Maker
 AppVersion={#AppVersion}
-VersionInfoVersion=0.1.0.2
+VersionInfoVersion=0.1.0.3
 AppVerName=Animation Maker {#AppVersion}
 AppPublisher=Animation Maker contributors
 AppPublisherURL=https://github.com/Malasuerte94/animation-maker
