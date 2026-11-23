@@ -63,6 +63,7 @@ public sealed partial class MainWindow : Window
         _settingsTimer.Tick += (_, _) => CommitControls();
         Closed += OnClosed;
         _updating = false;
+        StartUpdateChecks();
     }
     private async void OnPreviewLoaded(object sender, RoutedEventArgs e)
     {
@@ -731,5 +732,6 @@ public sealed partial class MainWindow : Window
         _cache.Clear();
         ClosePlayer();
         ClearDeltaPreview();
+        ApplyUpdateOnExit();
     }
 }

@@ -16,6 +16,8 @@ Get the latest build from [GitHub Releases](https://github.com/Malasuerte94/anim
 
 The Windows packages include .NET, WinUI and FFmpeg. End users do not need Node.js, Python, a development SDK, the Microsoft Store or an account. Video processing and export run locally.
 
+**Automatic updates start with Beta 5.** Install Beta 5 once or extract its portable ZIP. The packaged app checks the latest GitHub release at startup and every six hours while open. It downloads a newer setup in the background, verifies its SHA-256 checksum and shows a message in the status bar. Closing the last window for that copy applies the update to its existing folder. Portable copies keep their portable layout.
+
 **Requirements:** Windows x64, Windows 10 build 19041 or later / Windows 11, and a Direct3D 11 capable GPU. Automated GPU validation currently uses Windows 11 and an NVIDIA RTX 4070 Ti. Other hardware needs broader testing. This first beta is unsigned.
 
 ## Features

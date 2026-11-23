@@ -213,6 +213,13 @@
         </StackPanel></UserControl>
       </Border>
     </Grid>
-    <Border Grid.Row="3" Grid.ColumnSpan="3" Background="#111721" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="0,1,0,0" Padding="18,0"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="StatusLabel" Text="Ready · open a clip to begin" FontSize="11" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis"/><TextBlock x:Name="GpuLabel" Grid.Column="1" Text="DIRECT3D 11" FontSize="10" CharacterSpacing="60" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/></Grid></Border>
+    <Border Grid.Row="3" Grid.ColumnSpan="3" Background="#111721" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="0,1,0,0" Padding="18,0">
+      <Grid ColumnSpacing="12">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <TextBlock x:Name="StatusLabel" Text="Ready · open a clip to begin" FontSize="11" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis"/>
+        <TextBlock x:Name="UpdateLabel" Grid.Column="1" Visibility="Collapsed" FontSize="11" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+        <TextBlock x:Name="GpuLabel" Grid.Column="2" Text="DIRECT3D 11" FontSize="10" CharacterSpacing="60" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+      </Grid>
+    </Border>
   </Grid>
 </Window>

@@ -24,6 +24,7 @@ try {
     foreach ($required in @('AnimationMaker.exe', 'AnimationMaker.pri', 'App.xbf', 'MainWindow.xbf', 'Microsoft.UI.Xaml.dll', 'coreclr.dll', 'ffmpeg\ffmpeg.exe', 'ffmpeg\ffprobe.exe', 'delta-runtime\delta-runtime.js', 'delta-runtime\delta-runtime.iife.js', 'delta-runtime\delta-runtime.d.ts', 'delta-runtime\package.json', 'delta-runtime\README.md', 'delta-runtime\LICENSE')) {
         if (-not (Test-Path -LiteralPath (Join-Path $staging $required))) { throw "Portable dependency missing: $required" }
     }
+    'portable' | Set-Content -LiteralPath (Join-Path $staging 'update-channel') -Encoding ASCII
     foreach ($doc in @('README.md', 'VALIDATION.md', 'DELTA-FORMAT.md', 'THIRD-PARTY-NOTICES.md', 'RELEASE-NOTES.md', 'LICENSE')) { Copy-Item -LiteralPath (Join-Path $repoRoot $doc) -Destination $staging }
     Copy-Item -LiteralPath (Join-Path $repoRoot '.tools\ffmpeg\UPSTREAM-README.txt') -Destination (Join-Path $staging 'ffmpeg')
     Copy-Item -LiteralPath (Join-Path $repoRoot 'third-party\ffmpeg\SOURCE.md') -Destination (Join-Path $staging 'ffmpeg\SOURCE.md')
