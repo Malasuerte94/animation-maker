@@ -17,6 +17,9 @@ public readonly record struct SizeI(int Width, int Height);
 
 public sealed record KeyerSettings
 {
+    public const int MaxProtectedColors = 16;
+    public string[] ProtectedColors { get; init; } = [];
+    public int ProtectTolerance { get; init; } = 12;
     public bool Enabled { get; init; } = true;
     public KeyerMode Mode { get; init; } = KeyerMode.Quality;
     public string ScreenColor { get; init; } = "#00FF00";
@@ -30,6 +33,14 @@ public sealed record KeyerSettings
     public float BlueWeight { get; init; } = .5f;
     public float Choke { get; init; }
     public float Feather { get; init; }
+
+    public void ValidateProtectedColors()
+    {
+        if (ProtectedColors == null || ProtectedColors.Length > MaxProtectedColors)
+            throw new InvalidDataException($"Choose up to {MaxProtectedColors} protected colors.");
+        if (ProtectTolerance is < 0 or > 64) throw new InvalidDataException("Color tolerance must be between 0 and 64.");
+        foreach (var color in ProtectedColors) _ = ColorMath.ParseHex(color);
+    }
 }
 
 public sealed record MaskKeyframe(double Time, List<PointD> Points);
@@ -59,7 +70,8 @@ public sealed record PolygonMask
 
 public sealed record ExportSettings
 {
-    public int MaxFrameHeight { get; init; } = 512;
+    public const int DefaultMaxFrameHeight = 1024;
+    public int MaxFrameHeight { get; init; } = DefaultMaxFrameHeight;
     public int MaxAtlasSize { get; init; } = 4096;
     public AtlasLayout Layout { get; init; }
     public int Padding { get; init; } = 2;
@@ -67,7 +79,7 @@ public sealed record ExportSettings
     public bool Deduplicate { get; init; } = true;
     public AtlasImageFormat ImageFormat { get; init; } = AtlasImageFormat.Webp;
     public int WebpQuality { get; init; } = 75;
-    public VideoQuality VideoQuality { get; init; } = VideoQuality.High;
+    public VideoQuality VideoQuality { get; init; } = VideoQuality.Balanced;
     public bool IncludeAudio { get; init; }
     public int DeltaTolerance { get; init; } = 8;
     public DeltaAnalysisBackend DeltaAnalysisBackend { get; init; } = DeltaAnalysisBackend.Auto;
@@ -112,6 +124,7 @@ public sealed record ProjectDocument
         if (!Enum.IsDefined(Keyer.Mode) || !Enum.IsDefined(Export.Layout) || !Enum.IsDefined(Export.VideoQuality) || Export.Padding is < 0 or > 32 || Export.Extrusion is < 0 or > 8)
             throw new InvalidDataException("Unsupported export or keyer settings.");
         _ = ColorMath.ParseHex(Keyer.ScreenColor);
+        Keyer.ValidateProtectedColors();
         foreach (var mask in Masks)
             foreach (var key in mask.Keyframes)
                 if (!double.IsFinite(key.Time) || key.Time < 0 || key.Points.Count < 3 || key.Points.Any(p => !double.IsFinite(p.X) || !double.IsFinite(p.Y) || p.X < 0 || p.X > 1 || p.Y < 0 || p.Y > 1))
@@ -206,8 +219,8 @@ public static class ColorMath
 {
     public static (float R, float G, float B) ParseHex(string hex)
     {
-        if (hex.Length != 7 || hex[0] != '#' || !int.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out var value))
-            throw new InvalidDataException("Use a screen color such as #00FF00.");
+        if (hex is not { Length: 7 } || hex[0] != '#' || !int.TryParse(hex.AsSpan(1), System.Globalization.NumberStyles.AllowHexSpecifier, null, out var value))
+            throw new InvalidDataException("Enter a color in #RRGGBB format, such as #00FF00.");
         return (((value >> 16) & 255) / 255f, ((value >> 8) & 255) / 255f, (value & 255) / 255f);
     }
 }

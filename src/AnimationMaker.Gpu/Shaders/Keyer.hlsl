@@ -7,6 +7,9 @@ cbuffer Settings : register(b0) {
     float4 Crop;      // crop rectangle in input pixels
     float4 Preview;   // background, zoom, viewport width/height
     float4 Backdrop;  // image width/height, fit mode (0 fill, 1 fit), available
+    float4 Pan;       // preview offset in viewport pixels
+    float4 Protection; // palette size, max per-channel distance in sRGB byte values
+    float4 ProtectedColors[16];
 };
 Texture2D<float4> Image : register(t0);
 Texture2D<float4> Mask : register(t1);
@@ -30,6 +33,13 @@ float4 KeyPS(Vertex v) : SV_Target {
     if (Edge.z < .5) return float4(ToLinear(original.rgb) * original.a, original.a);
     float3 bg = Edge.w > .5 ? Plate.SampleLevel(LinearClamp, v.uv, 0).rgb : Screen.rgb;
     float2 masks = Mask.SampleLevel(LinearClamp, v.uv, 0).rg;
+    for (int i = 0; i < (int)Protection.x; ++i) {
+        float3 difference = abs(original.rgb - ProtectedColors[i].rgb) * 255;
+        if (max(difference.r, max(difference.g, difference.b)) <= Protection.y + .001) {
+            float keptAlpha = original.a * (1 - masks.g);
+            return float4(ToLinear(original.rgb) * keptAlpha, keptAlpha);
+        }
+    }
     float alpha;
     bool blue = bg.b > bg.g;
     float3 color = blue ? original.rbg : original.rgb;
@@ -155,7 +165,7 @@ float3 PreviewBackgroundColor(float2 uv, float2 viewportPosition) {
 float4 PreviewPS(Vertex v) : SV_Target {
     float fit = min(Preview.z / Sizes.z, Preview.w / Sizes.w) * Preview.y;
     float2 displayed = Sizes.zw * fit;
-    float2 uv = (v.position.xy - (Preview.zw - displayed) * .5) / displayed;
+    float2 uv = (v.position.xy - (Preview.zw - displayed) * .5 - Pan.xy) / displayed;
     if (any(uv < 0) || any(uv >= 1)) return float4(.047, .055, .071, 1);
     float2 pos = uv * Sizes.zw - .5, f = frac(pos);
     int2 p = (int2)floor(pos);

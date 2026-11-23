@@ -33,6 +33,28 @@
           <ComboBox x:Name="KeyMode" Header="Processing mode" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="Quality · color difference"/><ComboBoxItem Content="Fast · chroma distance"/></ComboBox>
           <Grid ColumnSpacing="6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="ScreenColor" Header="Screen color" Text="#00FF00" LostFocus="OnSettingChanged"/><Button Grid.Column="1" Content="⌖" VerticalAlignment="Bottom" Click="OnEyedropper" ToolTipService.ToolTip="Pick screen color from the source"/></Grid>
           <Button Content="Auto sample green" HorizontalAlignment="Stretch" Click="OnAutoSample"/>
+          <Expander Header="Protected colors" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+            <StackPanel Spacing="8">
+              <TextBlock Text="Keep these foreground colors when removing the background." Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap"/>
+              <Button Content="Pick from preview" Click="OnPickProtectedColor" HorizontalAlignment="Stretch"/>
+              <Grid ColumnSpacing="6">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBox x:Name="ProtectHex" PlaceholderText="#RRGGBB" AutomationProperties.Name="Protected color hex code"/>
+                <Button Grid.Column="1" Content="Add" Click="OnAddProtectedColor"/>
+              </Grid>
+              <ItemsControl x:Name="ProtectedColorList">
+                <ItemsControl.ItemTemplate><DataTemplate>
+                  <Grid ColumnSpacing="8" Margin="0,2">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <Border Width="16" Height="16" Background="{Binding}" CornerRadius="3" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1"/>
+                    <TextBlock Grid.Column="1" Text="{Binding}" VerticalAlignment="Center"/>
+                    <Button Grid.Column="2" Content="×" Tag="{Binding}" Click="OnRemoveProtectedColor" ToolTipService.ToolTip="Remove protected color" AutomationProperties.Name="Remove protected color"/>
+                  </Grid>
+                </DataTemplate></ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <NumberBox x:Name="ProtectToleranceInput" Header="Color tolerance · 0–64" Minimum="0" Maximum="64" Value="12" SmallChange="1" ValueChanged="OnSettingChanged" ToolTipService.ToolTip="0 matches the exact color. Increase to include similar shades."/>
+            </StackPanel>
+          </Expander>
           <Grid ColumnSpacing="6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button x:Name="PlateButton" Content="Load clean plate…" HorizontalAlignment="Stretch" Click="OnLoadPlate"/><Button Grid.Column="1" Content="×" Click="OnClearPlate" ToolTipService.ToolTip="Clear clean plate"/></Grid>
           <TextBlock x:Name="PlateLabel" Text="Optional background image, without the subject" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
           <StackPanel x:Name="FastControls" Spacing="5" Visibility="Collapsed"><TextBlock Text="Chroma tolerance" FontSize="12"/><Slider x:Name="Similarity" Minimum="0" Maximum="0.6" Value="0.1" StepFrequency="0.005" ValueChanged="OnSettingChanged"/><TextBlock Text="Chroma softness" FontSize="12"/><Slider x:Name="Softness" Minimum="0.005" Maximum="0.6" Value="0.12" StepFrequency="0.005" ValueChanged="OnSettingChanged"/></StackPanel>
@@ -53,22 +75,22 @@
 
     <Grid x:Name="EditorPreview" Grid.Row="1" Grid.Column="1" Margin="16,14,16,0">
       <Grid.RowDefinitions><RowDefinition Height="42"/><RowDefinition Height="*"/><RowDefinition Height="55"/></Grid.RowDefinitions>
-      <Grid ColumnSpacing="10"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="SourceTitle" Text="PREVIEW" FontSize="12" Foreground="{StaticResource MutedBrush}" FontWeight="SemiBold" CharacterSpacing="70" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/><Button Grid.Column="1" x:Name="BackToOriginalButton" Content="← Back to original" Visibility="Collapsed" Click="OnBackToOriginal" Foreground="{StaticResource AccentBrush}" ToolTipService.ToolTip="Return to the original clip and editing settings · Esc"/><ComboBox Grid.Column="2" x:Name="PreviewResolution" SelectedIndex="0" SelectionChanged="OnPreviewResolutionChanged" MinWidth="125"><ComboBoxItem Content="Proxy · 1080p"/><ComboBoxItem Content="Full resolution"/></ComboBox></Grid>
+      <Grid ColumnSpacing="10"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock x:Name="SourceTitle" Text="PREVIEW" FontSize="12" Foreground="{StaticResource MutedBrush}" FontWeight="SemiBold" CharacterSpacing="70" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/><Button Grid.Column="1" x:Name="BackToOriginalButton" Content="← Back to original" Visibility="Collapsed" Click="OnBackToOriginal" Foreground="{StaticResource AccentBrush}" ToolTipService.ToolTip="Return to the original clip and editing settings · Esc"/><ComboBox Grid.Column="2" x:Name="PreviewResolution" SelectedIndex="1" SelectionChanged="OnPreviewResolutionChanged" MinWidth="125"><ComboBoxItem Content="Proxy · 1080p"/><ComboBoxItem Content="Full resolution"/></ComboBox></Grid>
       <Border Grid.Row="1" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1" CornerRadius="10" Background="#0C121B">
         <Grid x:Name="Viewport" SizeChanged="OnViewportSizeChanged">
           <SwapChainPanel x:Name="PreviewSurface" Loaded="OnPreviewLoaded"/>
-          <Canvas x:Name="MaskOverlay" Background="Transparent" PointerPressed="OnPreviewPointerPressed" PointerMoved="OnPreviewPointerMoved" PointerReleased="OnPreviewPointerReleased" PointerCanceled="OnPreviewPointerCanceled" PointerCaptureLost="OnPreviewPointerCaptureLost"/>
+          <Canvas x:Name="MaskOverlay" Background="Transparent" PointerWheelChanged="OnPreviewWheel" PointerPressed="OnPreviewPointerPressed" PointerMoved="OnPreviewPointerMoved" PointerReleased="OnPreviewPointerReleased" PointerCanceled="OnPreviewPointerCanceled" PointerCaptureLost="OnPreviewPointerCaptureLost"/>
           <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="13" IsHitTestVisible="False">
             <TextBlock Text="◈" FontSize="70" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center"/>
             <TextBlock Text="Your next animation starts here" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Center"/>
             <TextBlock Text="Drop an MP4, MOV, WebM or exported atlas&#10;—or use Open media above" TextAlignment="Center" Foreground="{StaticResource MutedBrush}" FontSize="13" HorizontalAlignment="Center"/>
             <Border Background="#1C2935" CornerRadius="6" Padding="12,7" HorizontalAlignment="Center"><TextBlock Text="LOCAL PROCESSING  ·  GPU ACCELERATED" FontSize="10" CharacterSpacing="70" Foreground="{StaticResource MutedBrush}"/></Border>
           </StackPanel>
-          <Border x:Name="PickBanner" Background="#E022321A" CornerRadius="6" Padding="12,8" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="12" Visibility="Collapsed"><TextBlock Text="Click the background to sample its color · Esc cancels" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Border>
+          <Border x:Name="PickBanner" Background="#E022321A" CornerRadius="6" Padding="12,8" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="12" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock x:Name="PickHint" Foreground="{StaticResource AccentBrush}" FontSize="12"/></Border>
           <Border x:Name="CropBanner" Background="#DF162531" CornerRadius="6" Padding="12,8" VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="12" Visibility="Collapsed" IsHitTestVisible="False"><TextBlock Text="Drag handles to resize · drag inside to move · Enter / Esc finishes" TextWrapping="Wrap" FontSize="11"/></Border>
         </Grid>
       </Border>
-      <Grid Grid.Row="2" VerticalAlignment="Center" ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox x:Name="BackgroundChoice" SelectedIndex="0" SelectionChanged="OnViewChanged" MinWidth="120"><ComboBoxItem Content="Checkerboard"/><ComboBoxItem Content="White"/><ComboBoxItem Content="Black"/><ComboBoxItem Content="Magenta"/><ComboBoxItem Content="Alpha matte"/><ComboBoxItem Content="Image background"/></ComboBox><Button Grid.Column="1" Content="Image…" Click="OnChooseBackgroundImage" ToolTipService.ToolTip="Load a photo behind the video · preview only"/><ComboBox Grid.Column="2" x:Name="BackgroundFitChoice" SelectedIndex="0" SelectionChanged="OnViewChanged" HorizontalAlignment="Left" MinWidth="75" Visibility="Collapsed" ToolTipService.ToolTip="Fill crops the image to cover the frame. Fit shows the entire image."><ComboBoxItem Content="Fill"/><ComboBoxItem Content="Fit"/></ComboBox><CheckBox Grid.Column="3" x:Name="ShowSource" Content="Source" Checked="OnViewChanged" Unchecked="OnViewChanged"/><ComboBox Grid.Column="4" x:Name="ZoomChoice" SelectedIndex="0" SelectionChanged="OnViewChanged" MinWidth="80"><ComboBoxItem Content="Fit"/><ComboBoxItem Content="100%"/><ComboBoxItem Content="200%"/><ComboBoxItem Content="400%"/></ComboBox></Grid>
+      <Grid Grid.Row="2" VerticalAlignment="Center" ColumnSpacing="8"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><ComboBox x:Name="BackgroundChoice" SelectedIndex="0" SelectionChanged="OnViewChanged" MinWidth="120"><ComboBoxItem Content="Checkerboard"/><ComboBoxItem Content="White"/><ComboBoxItem Content="Black"/><ComboBoxItem Content="Magenta"/><ComboBoxItem Content="Alpha matte"/><ComboBoxItem Content="Image background"/></ComboBox><Button Grid.Column="1" Content="Image…" Click="OnChooseBackgroundImage" ToolTipService.ToolTip="Load a photo behind the video · preview only"/><ComboBox Grid.Column="2" x:Name="BackgroundFitChoice" SelectedIndex="0" SelectionChanged="OnViewChanged" HorizontalAlignment="Left" MinWidth="75" Visibility="Collapsed" ToolTipService.ToolTip="Fill crops the image to cover the frame. Fit shows the entire image."><ComboBoxItem Content="Fill"/><ComboBoxItem Content="Fit"/></ComboBox><CheckBox Grid.Column="3" x:Name="ShowSource" Content="Source" Checked="OnViewChanged" Unchecked="OnViewChanged"/><ComboBox Grid.Column="4" x:Name="ZoomChoice" SelectedIndex="0" SelectionChanged="OnZoomPresetChanged" ToolTipService.ToolTip="Scroll to zoom · drag to pan · middle-drag while editing · Fit recenters" MinWidth="80"><ComboBoxItem Content="Fit"/><ComboBoxItem Content="100%"/><ComboBoxItem Content="200%"/><ComboBoxItem Content="400%"/></ComboBox></Grid>
     </Grid>
 
     <Border x:Name="ExportSidebar" Grid.Row="1" Grid.RowSpan="2" Grid.Column="2" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1,0,0,0" Background="{StaticResource PanelBrush}">
@@ -77,7 +99,7 @@
         <TextBlock Text="OUTPUT" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" CharacterSpacing="100"/>
         <TextBlock x:Name="MediaInfo" Text="No clip loaded" Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap"/>
         <NumberBox x:Name="FpsInput" Header="Frames per second" Minimum="1" Maximum="240" Value="30" ValueChanged="OnSettingChanged"/>
-        <NumberBox x:Name="HeightInput" Header="Maximum frame height · px" Minimum="1" Maximum="16384" Value="512" ValueChanged="OnSettingChanged"/>
+        <NumberBox x:Name="HeightInput" Header="Maximum frame height · px" Minimum="1" Maximum="16384" Value="1024" ValueChanged="OnSettingChanged"/>
         <TextBlock x:Name="OutputSizeLabel" Text="Original canvas · aspect ratio preserved" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap"/>
         <Expander Header="Crop canvas" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
           <StackPanel Spacing="8">
@@ -90,30 +112,39 @@
           </StackPanel>
         </Expander>
         <Border Height="1" Background="{StaticResource StrokeBrush}"/>
-        <TextBlock Text="SPRITESHEET" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" CharacterSpacing="70"/>
-        <ComboBox x:Name="AtlasLayoutChoice" Header="Layout" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="Packed atlas · trimmed"/><ComboBoxItem Content="Classic grid · equal cells"/></ComboBox>
+        <ComboBox x:Name="ExportFormatChoice" Header="Export format" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnExportFormatChanged">
+          <ComboBoxItem Content="Spritesheet"/>
+          <ComboBoxItem Content="Delta animation · PixiJS (beta)"/>
+          <ComboBoxItem Content="Transparent WebM"/>
+          <ComboBoxItem Content="MP4 · RGB + Alpha"/>
+        </ComboBox>
+        <StackPanel x:Name="AtlasImageSettings" Spacing="10">
         <ComboBox x:Name="AtlasSizeChoice" Header="Maximum atlas page" SelectedIndex="1" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="2048 × 2048"/><ComboBoxItem Content="4096 × 4096"/><ComboBoxItem Content="8192 × 8192"/></ComboBox>
         <ComboBox x:Name="AtlasFormatChoice" Header="Atlas image format" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="WebP · smaller files"/><ComboBoxItem Content="PNG · lossless"/></ComboBox>
         <NumberBox x:Name="WebpQualityInput" Header="WebP quality · 1–100" Minimum="1" Maximum="100" Value="75" SmallChange="1" ValueChanged="OnSettingChanged"/>
-        <TextBlock Text="75 = medium (default). Lower values make smaller files; higher values keep more detail. Applies to spritesheet and delta pages; transparency is preserved." Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap"/>
+        </StackPanel>
+        <StackPanel x:Name="SpritesheetSettings" Spacing="10">
+        <ComboBox x:Name="AtlasLayoutChoice" Header="Layout" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="Packed atlas · trimmed"/><ComboBoxItem Content="Classic grid · equal cells"/></ComboBox>
         <CheckBox x:Name="Deduplicate" Content="Reuse identical frames" IsChecked="True" Checked="OnSettingChanged" Unchecked="OnSettingChanged"/>
         <TextBlock Text="WebP / PNG RGBA + PixiJS / Phaser JSON&#10;2 px padding · 1 px edge extrusion" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap"/>
         <Button x:Name="AtlasExportButton" Content="Export spritesheet" Background="{StaticResource AccentBrush}" Foreground="#13210D" FontWeight="SemiBold" HorizontalAlignment="Stretch" Click="OnExportAtlas"/>
+        </StackPanel>
+        <StackPanel x:Name="DeltaSettings" Spacing="10" Visibility="Collapsed">
+        <TextBlock Text="Export patch images and delta.animation.json for the PixiJS runtime." FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
         <NumberBox x:Name="DeltaToleranceInput" Header="Delta tolerance · 0–32" Minimum="0" Maximum="32" Value="8" SmallChange="1" ValueChanged="OnSettingChanged"/>
         <ComboBox x:Name="DeltaAnalysisChoice" Header="Delta analysis" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="Auto"/><ComboBoxItem Content="CPU"/><ComboBoxItem Content="GPU"/></ComboBox>
-        <TextBlock Text="Auto measures analysis speed. CPU/GPU applies to Delta analysis; keying stays GPU accelerated." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
         <TextBlock x:Name="DeltaBackendLabel" Text="Analysis backend is shown during export." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
-        <TextBlock Text="0 = exact patch selection. 8 = medium tolerance for video noise. Higher values make smaller patches. WebP adds color compression; use PNG + tolerance 0 for exact RGBA." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+        <TextBlock Text="Higher tolerance skips small color changes. Choose PNG and tolerance 0 for exact RGBA." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
         <Button x:Name="DeltaPreviewButton" Content="Preview delta · 1 second" HorizontalAlignment="Stretch" Click="OnPreviewDelta"/>
         <Button x:Name="DeltaExportButton" Content="Export Delta Animation · BETA" HorizontalAlignment="Stretch" Click="OnExportDelta"/>
-        <TextBlock Text="Exports WebP/PNG pages + delta.animation.json. Download the PixiJS runtime separately with the button above. Use Player to test exports." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
-        <Border Height="1" Background="{StaticResource StrokeBrush}"/>
-        <TextBlock Text="VIDEO EXPORT" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}" CharacterSpacing="70"/>
-        <ComboBox x:Name="VideoQualityChoice" Header="Video quality" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="High quality"/><ComboBoxItem Content="Balanced"/><ComboBoxItem Content="Smaller file"/><ComboBoxItem Content="Lossless (WebM only)"/></ComboBox>
+        </StackPanel>
+        <StackPanel x:Name="VideoSettings" Spacing="10" Visibility="Collapsed">
+        <ComboBox x:Name="VideoQualityChoice" Header="Video quality" SelectedIndex="1" HorizontalAlignment="Stretch" SelectionChanged="OnSettingChanged"><ComboBoxItem Content="High quality"/><ComboBoxItem Content="Balanced"/><ComboBoxItem Content="Smaller file"/><ComboBoxItem x:Name="LosslessQualityItem" Content="Lossless (WebM only)"/></ComboBox>
         <CheckBox x:Name="IncludeAudio" Content="Keep audio" Checked="OnSettingChanged" Unchecked="OnSettingChanged"/>
         <Button x:Name="WebmExportButton" Content="Export transparent WebM" HorizontalAlignment="Stretch" Click="OnExportWebm"/>
         <Button x:Name="PackedMp4ExportButton" Content="Export MP4 · RGB + Alpha" HorizontalAlignment="Stretch" Click="OnExportPackedMp4"/>
-        <TextBlock Text="MP4 stores color on the left and the alpha mask on the right. Use Player or a compatible shader to combine them." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+        <TextBlock x:Name="PackedMp4Help" Text="MP4 stores color on the left and opacity on the right. Player or a compatible shader combines them." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
+        </StackPanel>
         </StackPanel></UserControl>
         <ProgressBar x:Name="ExportProgressBar" Minimum="0" Maximum="100" Visibility="Collapsed"/>
         <TextBlock x:Name="ExportStage" FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
@@ -143,6 +174,7 @@
         <Border Grid.Row="1" BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1" CornerRadius="10" Background="#0C121B">
           <Grid x:Name="PlayerViewport" SizeChanged="OnPlayerViewportSizeChanged">
             <SwapChainPanel x:Name="PlayerSurface" Loaded="OnPlayerSurfaceLoaded"/>
+            <Canvas x:Name="PlayerGestureSurface" Background="Transparent" PointerWheelChanged="OnPreviewWheel" PointerPressed="OnPlayerPanPressed" PointerMoved="OnPanMoved" PointerReleased="OnPanReleased" PointerCanceled="OnPanEnded" PointerCaptureLost="OnPanEnded"/>
             <StackPanel x:Name="PlayerEmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14" IsHitTestVisible="False">
               <TextBlock Text="▷" FontSize="70" Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center"/>
               <TextBlock Text="Play your exported animations" FontSize="23" FontWeight="SemiBold" HorizontalAlignment="Center"/>
@@ -162,7 +194,7 @@
           <NumberBox x:Name="PlayerFreezeFrame" Header="Freeze at frame · starts at 0" Minimum="0" Maximum="0" Value="0" SmallChange="1" IsEnabled="False" ValueChanged="OnPlayerFreezeFrameChanged"/>
           <TextBlock Text="Scrub or enter a frame to pause there. Space plays/pauses; arrow keys step one frame." FontSize="11" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>
           <ComboBox x:Name="PlayerBackgroundChoice" Header="Background" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnPlayerViewChanged"><ComboBoxItem Content="Checkerboard"/><ComboBoxItem Content="White"/><ComboBoxItem Content="Black"/><ComboBoxItem Content="Magenta"/><ComboBoxItem Content="Alpha matte"/></ComboBox>
-          <ComboBox x:Name="PlayerZoomChoice" Header="Zoom" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnPlayerViewChanged"><ComboBoxItem Content="Fit"/><ComboBoxItem Content="100%"/><ComboBoxItem Content="200%"/><ComboBoxItem Content="400%"/></ComboBox>
+          <ComboBox x:Name="PlayerZoomChoice" Header="Zoom" SelectedIndex="0" HorizontalAlignment="Stretch" SelectionChanged="OnZoomPresetChanged" ToolTipService.ToolTip="Scroll to zoom · drag to pan · Fit recenters"><ComboBoxItem Content="Fit"/><ComboBoxItem Content="100%"/><ComboBoxItem Content="200%"/><ComboBoxItem Content="400%"/></ComboBox>
           <Border Height="1" Background="{StaticResource StrokeBrush}"/>
           <TextBlock Text="PIXIJS INTEGRATION" FontSize="12" FontWeight="SemiBold" Foreground="{StaticResource MutedBrush}"/>
           <TextBlock Text="One reusable plugin for all delta animations. Supports play, pause, loop, speed and freezing at any frame." FontSize="12" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"/>

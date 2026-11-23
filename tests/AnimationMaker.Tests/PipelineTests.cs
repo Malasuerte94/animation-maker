@@ -67,6 +67,26 @@ public sealed class PipelineTests
         Assert.All(result.Pixels, value => Assert.Equal(0, value));
     }
     [Fact]
+    public void ProtectedColorsPreserveNearbySourceRgbaInBothKeyModes()
+    {
+        using var gpu = new GpuFrameProcessor();
+        var frame = new RgbaFrame(3, 1, [0, 255, 0, 255, 25, 204, 31, 128, 20, 170, 92, 255]);
+        var crop = new RectI(0, 0, 3, 1);
+        var size = new SizeI(3, 1);
+        foreach (var mode in Enum.GetValues<KeyerMode>())
+        {
+            var settings = new KeyerSettings { Mode = mode, ProtectedColors = ["#14AA5C", "#16C81B"], ProtectTolerance = 4 };
+            var output = gpu.Process(frame, settings, [], 0, crop, size);
+            Assert.Equal(0, output.Pixels[3]);
+            Assert.Equal(frame.Pixels[4..], output.Pixels[4..]);
+            var exact = gpu.Process(frame, settings with { ProtectTolerance = 0 }, [], 0, crop, size);
+            Assert.True(exact.Pixels[7] < 128);
+            Assert.Equal(frame.Pixels[8..], exact.Pixels[8..]);
+            var remove = new PolygonMask { Kind = MaskKind.Remove, Keyframes = [new(0, [new(0, 0), new(1, 0), new(1, 1), new(0, 1)])] };
+            Assert.All(gpu.Process(frame, settings, [remove], 0, crop, size).Pixels, b => Assert.Equal(0, b));
+        }
+    }
+    [Fact]
     public void GpuKeysMagentaAndPreservesGreenAndPartialAlpha()
     {
         using var gpu = new GpuFrameProcessor();

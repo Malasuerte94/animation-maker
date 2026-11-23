@@ -5,11 +5,11 @@ public enum CropHandle { None, Move, TopLeft, Top, TopRight, Right, BottomRight,
 // Coordinates are original source pixels; the viewport is in device-independent UI pixels.
 public readonly record struct CropViewport(double Left, double Top, double Width, double Height, SizeI Source)
 {
-    public static CropViewport Fit(SizeI source, SizeI output, double width, double height, double zoom = 1)
+    public static CropViewport Fit(SizeI source, SizeI output, double width, double height, double zoom = 1, PointD pan = default)
     {
         double scale = Math.Min(width / output.Width, height / output.Height) * zoom;
         double w = output.Width * scale, h = output.Height * scale;
-        return new((width - w) / 2, (height - h) / 2, w, h, source);
+        return new((width - w) / 2 + pan.X, (height - h) / 2 + pan.Y, w, h, source);
     }
     public PointD Project(PointD point) => new(Left + point.X / Source.Width * Width, Top + point.Y / Source.Height * Height);
     public PointD Unproject(PointD point) => new((point.X - Left) / Width * Source.Width, (point.Y - Top) / Height * Source.Height);

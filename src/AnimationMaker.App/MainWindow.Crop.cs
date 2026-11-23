@@ -12,7 +12,7 @@ namespace AnimationMaker.App;
 public sealed partial class MainWindow
 {
     private bool _cropEditing, _cropViewReady;
-    private int _cropPreviousZoom;
+    private PreviewCamera _cropPreviousCamera;
     private CropHandle _cropHandle;
     private PointD _cropAnchor;
     private ProjectDocument? _cropDragStart;
@@ -23,7 +23,7 @@ public sealed partial class MainWindow
     private SizeI PreviewOutputSize => _cropEditing && _info != null
         ? FrameGeometry.FitHeight(new(_info.Width, _info.Height), _project.Export.MaxFrameHeight) : _project.OutputSize(_info!);
     private CropViewport? CropView => _info == null || _gpu == null || _gpu.OutputSize.Width <= 0 || Viewport.ActualWidth <= 0 || Viewport.ActualHeight <= 0
-        ? null : CropViewport.Fit(new(_info.Width, _info.Height), _gpu.OutputSize, Viewport.ActualWidth, Viewport.ActualHeight, ZoomFactor);
+        ? null : CropViewport.Fit(new(VisibleSourceRect.Width, VisibleSourceRect.Height), _gpu.OutputSize, Viewport.ActualWidth, Viewport.ActualHeight, ZoomFactor, _editorCamera.Pan);
 
     private void OnCropEnabledChanged(object sender, RoutedEventArgs e)
     {
@@ -42,9 +42,9 @@ public sealed partial class MainWindow
         StopPlayback(); _settingsTimer?.Stop();
         bool updating = _updating; _updating = true; CropEnabled.IsChecked = true; _updating = updating;
         if (!CommitControls()) return;
-        _cropEditing = true; _cropViewReady = false; _cropPreviousZoom = ZoomChoice.SelectedIndex;
-        _updating = true; ZoomChoice.SelectedIndex = 0; _updating = false;
-        _draft = null; _editingMask = _dragVertex = -1; _picking = false; PickBanner.Visibility = Visibility.Collapsed;
+        _cropEditing = true; _cropViewReady = false; _cropPreviousCamera = _editorCamera;
+        SetCamera(false, default);
+        _draft = null; _editingMask = _dragVertex = -1; _pickTarget = PickTarget.None; PickBanner.Visibility = Visibility.Collapsed;
         CropBanner.Visibility = Visibility.Visible; EditCropButton.Content = "Done cropping";
         StatusLabel.Text = "Crop · drag the handles to resize, inside to move, outside to draw · Esc finishes · Ctrl+Z undoes";
         RequestPreview();
@@ -60,7 +60,7 @@ public sealed partial class MainWindow
         FinishCropDrag();
         if (!_cropEditing) return;
         _cropEditing = _cropViewReady = false;
-        bool updating = _updating; _updating = true; ZoomChoice.SelectedIndex = _cropPreviousZoom; _updating = updating;
+        SetCamera(false, _cropPreviousCamera);
         CropBanner.Visibility = Visibility.Collapsed; EditCropButton.Content = "Adjust on video";
         DrawOverlay();
     }
@@ -110,11 +110,13 @@ public sealed partial class MainWindow
     }
     private void OnPreviewPointerCanceled(object sender, PointerRoutedEventArgs e)
     {
+        OnPanEnded(sender, e);
         if (_cropPointerId == e.Pointer.PointerId) FinishCropDrag(cancel: true);
         _dragVertex = -1;
     }
     private void OnPreviewPointerCaptureLost(object sender, PointerRoutedEventArgs e)
     {
+        OnPanEnded(sender, e);
         if (_cropPointerId == e.Pointer.PointerId) FinishCropDrag();
         _dragVertex = -1;
     }

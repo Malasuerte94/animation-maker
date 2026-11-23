@@ -66,13 +66,9 @@ public sealed partial class MainWindow
     private void PresentPlayer()
     {
         if (_closed || _playerGpu == null || !_playerTabSelected) return;
-        float zoom = 1;
-        if (_playerGpu.OutputSize.Width > 0 && PlayerZoomChoice.SelectedIndex > 0)
-        {
-            float fit = Math.Min((float)PlayerPixelWidth / _playerGpu.OutputSize.Width, (float)PlayerPixelHeight / _playerGpu.OutputSize.Height);
-            zoom = (PlayerZoomChoice.SelectedIndex switch { 1 => 1, 2 => 2, _ => 4 }) / Math.Max(.000001f, fit);
-        }
-        _playerGpu.Present(PlayerPixelWidth, PlayerPixelHeight, (PreviewBackground)Math.Max(0, PlayerBackgroundChoice.SelectedIndex), zoom);
+        float zoom = _playerCamera.Scale is { } scale ? (float)(scale / FitScale(true)) : 1;
+        _playerGpu.Present(PlayerPixelWidth, PlayerPixelHeight, (PreviewBackground)Math.Max(0, PlayerBackgroundChoice.SelectedIndex), zoom,
+            pan: new(_playerCamera.Pan.X * PlayerSurface.CompositionScaleX, _playerCamera.Pan.Y * PlayerSurface.CompositionScaleY));
     }
     private void OnPlayerViewChanged(object sender, object e) { if (!_updating) PresentPlayer(); }
     private void OnPlayerViewportSizeChanged(object sender, SizeChangedEventArgs e)
@@ -129,6 +125,7 @@ public sealed partial class MainWindow
         int frameCount = source?.Info.FrameCount ?? FrameGeometry.FrameCount(0, info.Duration, info.Fps);
         if (frameCount <= 0) throw new InvalidDataException("The export contains no frames.");
         _playerMedia = new(path, info, source, frameCount, info.PackedAlphaSize); _playerFrame = 0;
+        SetCamera(true, default);
         PlayerTitle.Text = System.IO.Path.GetFileName(path);
         UpdatePlayerInfo(_playerMedia);
         _playerUpdating = true;

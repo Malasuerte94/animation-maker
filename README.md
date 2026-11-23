@@ -33,11 +33,11 @@ The Windows packages include .NET, WinUI and FFmpeg. End users do not need Node.
 ## Quick start
 
 1. In **Editor**, open or drop an MP4, MOV or WebM.
-2. Use **Auto sample green** for green backgrounds or sample any screen color with the eyedropper. Adjust the matte and inspect edges over white, black, magenta and **Alpha matte**. Use **Full resolution** to judge final edges.
-3. Set the in/out range, frame rate and maximum frame height. Add crop or masks if needed.
-4. Choose **WebP** and an image quality, or **PNG** for lossless images.
-5. Export a spritesheet, transparent WebM, **MP4 · RGB + Alpha**, or **Delta Animation · BETA**.
-6. Use **Play last export** or open the export folder in **Player**. Your Editor session stays available in its own tab.
+2. Use **Auto sample green** or pick the screen color with the eyedropper. Under **Protected colors**, sample a foreground color or enter its hex code to keep it. Increase **Color tolerance** to keep nearby shades.
+3. Scroll over the preview to zoom around the pointer. Drag to pan and choose **Fit** to recenter. Middle-drag also pans while editing a crop or mask.
+4. Set the in/out range, frame rate and maximum frame height. The editor starts at **Full resolution** with a **1024 px** export height limit.
+5. Choose **Spritesheet**, **Delta animation**, **Transparent WebM** or **MP4 · RGB + Alpha** under **Export format**. Atlas formats offer WebP or PNG. Video quality starts at **Balanced** for each new clip.
+6. Use **Play last export** to inspect the result in **Player**. The app remembers the preview resolution, maximum frame height, protected palette and tolerance, and last export format between sessions.
 
 Player supports play/pause, loop, 0.25–2× speed, scrub, frame stepping, backgrounds and zoom. Enter a zero-based frame in **Freeze at frame** to stop there. Space toggles playback; arrow keys step one frame. Open the animation JSON to play an atlas; a WebP page alone is a still image. Video previews are silent. WebM and MP4 exports can retain audio.
 

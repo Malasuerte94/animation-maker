@@ -20,7 +20,9 @@ namespace AnimationMaker.App;
 
 public sealed partial class MainWindow : Window
 {
-    private bool _updating = true, _closed, _playing, _picking;
+    private bool _updating = true, _closed, _playing;
+    private enum PickTarget { None, Screen, Protected }
+    private PickTarget _pickTarget;
     private ProjectDocument _project = new();
     private EditHistory<ProjectDocument> _history = new(new());
     private VideoInfo? _info;
@@ -45,12 +47,13 @@ public sealed partial class MainWindow : Window
     private bool _startupOpened;
 
     private sealed record EditorSnapshot(ProjectDocument Project, EditHistory<ProjectDocument> History, VideoInfo Info,
-        IAnimationSource? Atlas, double Position, string? ProjectPath, bool SourceView, int Resolution, int Zoom,
+        IAnimationSource? Atlas, double Position, string? ProjectPath, bool SourceView, int Resolution, PreviewCamera Camera,
         int SelectedMask, List<PointD>? Draft, int EditingMask);
 
     public MainWindow()
     {
         InitializeComponent();
+        LoadPreferences();
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1480, 940));
         AppWindow.TitleBar.BackgroundColor = Windows.UI.Color.FromArgb(255, 12, 17, 25);
         AppWindow.TitleBar.ForegroundColor = Colors.White;
@@ -84,19 +87,14 @@ public sealed partial class MainWindow : Window
     }
     private int PixelWidth => Math.Max(1, (int)Math.Round(PreviewSurface.ActualWidth * PreviewSurface.CompositionScaleX));
     private int PixelHeight => Math.Max(1, (int)Math.Round(PreviewSurface.ActualHeight * PreviewSurface.CompositionScaleY));
-    private float ZoomFactor
-    {
-        get
-        {
-            if (_gpu == null || _gpu.OutputSize.Width == 0 || ZoomChoice.SelectedIndex <= 0) return 1;
-            float fit = Math.Min((float)PixelWidth / _gpu.OutputSize.Width, (float)PixelHeight / _gpu.OutputSize.Height);
-            return (ZoomChoice.SelectedIndex switch { 1 => 1, 2 => 2, _ => 4 }) / Math.Max(.000001f, fit);
-        }
-    }
+    private float ZoomFactor => _editorCamera.Scale is { } scale ? (float)(scale / FitScale(false)) : 1;
     private void Present()
     {
         if (_closed) return;
-        _gpu?.Present(PixelWidth, PixelHeight, (PreviewBackground)Math.Max(0, BackgroundChoice.SelectedIndex), ZoomFactor, (BackgroundImageFit)Math.Max(0, BackgroundFitChoice.SelectedIndex)); DrawOverlay();
+        _gpu?.Present(PixelWidth, PixelHeight, (PreviewBackground)Math.Max(0, BackgroundChoice.SelectedIndex), ZoomFactor,
+            (BackgroundImageFit)Math.Max(0, BackgroundFitChoice.SelectedIndex),
+            new(_editorCamera.Pan.X * PreviewSurface.CompositionScaleX, _editorCamera.Pan.Y * PreviewSurface.CompositionScaleY));
+        DrawOverlay();
     }
     private void OnViewportSizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -157,7 +155,12 @@ public sealed partial class MainWindow : Window
         else UpdateBackgroundControls();
         Present();
     }
-    private void OnPreviewResolutionChanged(object sender, object e) { if (!_updating) { StopPlayback(); RequestPreview(); } }
+    private void OnPreviewResolutionChanged(object sender, object e)
+    {
+        if (_updating) return;
+        if (!_showingExport) SavePreferences(_preferences with { FullResolution = PreviewResolution.SelectedIndex == 1 });
+        StopPlayback(); RequestPreview();
+    }
 
     private async Task Guard(Func<Task> action)
     {
@@ -196,7 +199,8 @@ public sealed partial class MainWindow : Window
         EndCropEditing();
         StopPlayback(); _settingsTimer?.Stop(); _sourceCts.Cancel(); _sourceCts.Dispose(); _sourceCts = new(); _previewCts?.Cancel();
         Interlocked.Increment(ref _renderVersion);
-        _cache.Clear(); _decoded = null; _draft = null; _editingMask = -1; _picking = false; PickBanner.Visibility = Visibility.Collapsed;
+        _cache.Clear(); _decoded = null; _draft = null; _editingMask = -1; _pickTarget = PickTarget.None; PickBanner.Visibility = Visibility.Collapsed;
+        SetCamera(false, default);
     }
     private async Task LoadPathAsync(string path, bool exportPreview = false)
     {
@@ -224,7 +228,7 @@ public sealed partial class MainWindow : Window
         else
         {
             info = await _ffmpeg.ProbeAsync(path, _sourceCts.Token);
-            project = new() { SourcePath = path, TrimEnd = info.Duration, Fps = Math.Clamp(info.Fps, 1, 240), Keyer = new() { Enabled = !info.HasAlpha } };
+            project = _preferences.NewClip(path, info);
         }
         if (exportPreview) project = project with { Keyer = project.Keyer with { Enabled = false }, Export = project.Export with { MaxFrameHeight = info.Height } };
         _atlas = atlas; _info = info; _project = project; _history = new(project); _position = project.TrimStart; _projectPath = projectPath;
@@ -274,16 +278,17 @@ public sealed partial class MainWindow : Window
         if (_updating || _info == null || _atlas != null || _showingExport) return false;
         try
         {
-            var keyer = _project.Keyer with { Enabled = KeyEnabled.IsOn, Mode = (KeyerMode)Math.Max(0, KeyMode.SelectedIndex), ScreenColor = ScreenColor.Text.Trim(), Similarity = (float)Similarity.Value, Softness = (float)Softness.Value, ClipBlack = (float)BlackClip.Value, ClipWhite = (float)WhiteClip.Value, Despill = (float)Despill.Value, RedWeight = (float)Valid(RedWeight, .5), BlueWeight = (float)Valid(BlueWeight, .5), Choke = (float)Valid(Choke, 0), Feather = (float)Valid(Feather, 0) };
+            var keyer = _project.Keyer with { Enabled = KeyEnabled.IsOn, Mode = (KeyerMode)Math.Max(0, KeyMode.SelectedIndex), ScreenColor = ScreenColor.Text.Trim(), ProtectTolerance = (int)Math.Round(Valid(ProtectToleranceInput, _project.Keyer.ProtectTolerance)), Similarity = (float)Similarity.Value, Softness = (float)Softness.Value, ClipBlack = (float)BlackClip.Value, ClipWhite = (float)WhiteClip.Value, Despill = (float)Despill.Value, RedWeight = (float)Valid(RedWeight, .5), BlueWeight = (float)Valid(BlueWeight, .5), Choke = (float)Valid(Choke, 0), Feather = (float)Valid(Feather, 0) };
             RectI? crop = CropEnabled.IsChecked == true ? new((int)Valid(CropX, 0), (int)Valid(CropY, 0), (int)Valid(CropWidth, _info.Width), (int)Valid(CropHeight, _info.Height)) : null;
             FrameGeometry.ValidateCrop(crop, _info.Width, _info.Height);
-            var project = _project with { Keyer = keyer, Fps = Valid(FpsInput, _project.Fps), Crop = crop, Export = _project.Export with { MaxFrameHeight = (int)Valid(HeightInput, 512), MaxAtlasSize = AtlasSizeChoice.SelectedIndex switch { 0 => 2048, 2 => 8192, _ => 4096 }, Layout = (AtlasLayout)Math.Max(0, AtlasLayoutChoice.SelectedIndex), ImageFormat = (AtlasImageFormat)Math.Max(0, AtlasFormatChoice.SelectedIndex), WebpQuality = (int)Math.Round(Valid(WebpQualityInput, 75)), Deduplicate = Deduplicate.IsChecked == true, VideoQuality = (VideoQuality)Math.Max(0, VideoQualityChoice.SelectedIndex), IncludeAudio = IncludeAudio.IsChecked == true, DeltaTolerance = (int)Math.Round(Valid(DeltaToleranceInput, 8)), DeltaAnalysisBackend = (DeltaAnalysisBackend)Math.Max(0, DeltaAnalysisChoice.SelectedIndex) } };
+            var project = _project with { Keyer = keyer, Fps = Valid(FpsInput, _project.Fps), Crop = crop, Export = _project.Export with { MaxFrameHeight = (int)Valid(HeightInput, _project.Export.MaxFrameHeight), MaxAtlasSize = AtlasSizeChoice.SelectedIndex switch { 0 => 2048, 2 => 8192, _ => 4096 }, Layout = (AtlasLayout)Math.Max(0, AtlasLayoutChoice.SelectedIndex), ImageFormat = (AtlasImageFormat)Math.Max(0, AtlasFormatChoice.SelectedIndex), WebpQuality = (int)Math.Round(Valid(WebpQualityInput, 75)), Deduplicate = Deduplicate.IsChecked == true, VideoQuality = (VideoQuality)Math.Max(0, VideoQualityChoice.SelectedIndex), IncludeAudio = IncludeAudio.IsChecked == true, DeltaTolerance = (int)Math.Round(Valid(DeltaToleranceInput, 8)), DeltaAnalysisBackend = (DeltaAnalysisBackend)Math.Max(0, DeltaAnalysisChoice.SelectedIndex) } };
             project.Validate(); Commit(project, false); return true;
         }
         catch (Exception ex) when (ex is InvalidDataException or ArgumentOutOfRangeException or OverflowException) { StatusLabel.Text = ex.Message; return false; }
     }
     private void Commit(ProjectDocument project, bool sync = true)
     {
+        RememberEdits(_project, project);
         _project = project; _history.Set(project); if (sync) SyncControls(); else UpdateLabels(); RequestPreview();
     }
     private void SyncControls()
@@ -295,6 +300,7 @@ public sealed partial class MainWindow : Window
         {
             var k = _project.Keyer; var e = _project.Export;
             KeyEnabled.IsOn = k.Enabled; KeyMode.SelectedIndex = (int)k.Mode; ScreenColor.Text = k.ScreenColor;
+            ProtectedColorList.ItemsSource = k.ProtectedColors; ProtectToleranceInput.Value = k.ProtectTolerance;
             Similarity.Value = k.Similarity; Softness.Value = k.Softness; BlackClip.Value = k.ClipBlack; WhiteClip.Value = k.ClipWhite; Despill.Value = k.Despill;
             RedWeight.Value = k.RedWeight; BlueWeight.Value = k.BlueWeight; Choke.Value = k.Choke; Feather.Value = k.Feather;
             PlateLabel.Text = k.CleanPlatePath == null ? "Optional background image, without the subject" : System.IO.Path.GetFileName(k.CleanPlatePath);
@@ -304,6 +310,7 @@ public sealed partial class MainWindow : Window
             AtlasFormatChoice.SelectedIndex = (int)e.ImageFormat; WebpQualityInput.Value = e.WebpQuality;
             DeltaToleranceInput.Value = e.DeltaTolerance; DeltaAnalysisChoice.SelectedIndex = (int)e.DeltaAnalysisBackend;
             Deduplicate.IsChecked = e.Deduplicate; VideoQualityChoice.SelectedIndex = (int)e.VideoQuality; IncludeAudio.IsChecked = e.IncludeAudio; IncludeAudio.IsEnabled = _info.HasAudio;
+            UpdateExportFormat();
             int selected = MaskList.SelectedIndex; MaskList.ItemsSource = _project.Masks; if (selected < _project.Masks.Count) MaskList.SelectedIndex = selected;
             PositionSlider.Maximum = Math.Max(.001, _info.Duration); PositionSlider.StepFrequency = 1 / _project.Fps; PositionSlider.Value = _position;
             UpdateLabels();
@@ -348,7 +355,7 @@ public sealed partial class MainWindow : Window
         try
         {
             ct.ThrowIfCancellationRequested(); if (version != _renderVersion || _closed) return;
-            var project = _project; bool sourceView = ShowSource.IsChecked == true || _picking;
+            var project = _project; bool sourceView = ShowSource.IsChecked == true || _pickTarget != PickTarget.None;
             bool cropEditing = _cropEditing;
             var crop = PreviewCrop(source); var size = PreviewOutputSize;
             await Task.Run(() => _gpu!.Render(source, sourceView ? project.Keyer with { Enabled = false } : project.Keyer, project.Masks, position, crop, size), ct);
@@ -450,15 +457,62 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private void OnUndo(object sender, RoutedEventArgs e) { if (_showingExport) return; FinishCropDrag(); StopPlayback(); _settingsTimer?.Stop(); _project = _history.Undo(); SyncControls(); RequestPreview(); }
-    private void OnRedo(object sender, RoutedEventArgs e) { if (_showingExport) return; FinishCropDrag(); StopPlayback(); _settingsTimer?.Stop(); _project = _history.Redo(); SyncControls(); RequestPreview(); }
+    private void OnUndo(object sender, RoutedEventArgs e) => RestoreEdit(redo: false);
+    private void OnRedo(object sender, RoutedEventArgs e) => RestoreEdit(redo: true);
+    private void RestoreEdit(bool redo)
+    {
+        if (_showingExport) return;
+        FinishCropDrag(); StopPlayback(); _settingsTimer?.Stop();
+        var previous = _project;
+        _project = redo ? _history.Redo() : _history.Undo();
+        RememberEdits(previous, _project); SyncControls(); RequestPreview();
+    }
     private async void OnSaveProject(object sender, RoutedEventArgs e) => await Guard(async () =>
     {
         if (_info == null || _atlas != null) return; _settingsTimer?.Stop(); if (!CommitControls()) return;
         var picker = new FileSavePicker { SuggestedFileName = System.IO.Path.GetFileNameWithoutExtension(_project.SourcePath) }; picker.FileTypeChoices.Add("Animation Maker project", [".animproj"]); InitializePicker(picker);
         if (await picker.PickSaveFileAsync() is { } file) { await ProjectStore.SaveAsync(file.Path, _project); _projectPath = file.Path; StatusLabel.Text = "Project saved · " + file.Path; }
     });
-    private void OnEyedropper(object sender, RoutedEventArgs e) { if (_decoded == null) return; EndCropEditing(); StopPlayback(); _picking = !_picking; PickBanner.Visibility = _picking ? Visibility.Visible : Visibility.Collapsed; RequestPreview(); }
+    private void OnEyedropper(object sender, RoutedEventArgs e) => TogglePicker(PickTarget.Screen);
+    private void OnPickProtectedColor(object sender, RoutedEventArgs e) => TogglePicker(PickTarget.Protected);
+    private void TogglePicker(PickTarget target)
+    {
+        if (_decoded == null) return;
+        EndCropEditing(); StopPlayback();
+        _settingsTimer?.Stop();
+        if (!CommitControls()) return;
+        _pickTarget = _pickTarget == target ? PickTarget.None : target;
+        PickHint.Text = target == PickTarget.Screen ? "Click the background color to remove · Esc cancels" : "Click a foreground color to keep · Esc cancels";
+        PickBanner.Visibility = _pickTarget != PickTarget.None ? Visibility.Visible : Visibility.Collapsed;
+        RequestPreview();
+    }
+
+    private void OnAddProtectedColor(object sender, RoutedEventArgs e)
+    {
+        _settingsTimer?.Stop();
+        if (CommitControls() && AddProtectedColor(ProtectHex.Text.Trim().ToUpperInvariant())) ProtectHex.Text = "";
+    }
+
+    private bool AddProtectedColor(string color)
+    {
+        try { ColorMath.ParseHex(color); }
+        catch (InvalidDataException ex) { StatusLabel.Text = ex.Message; return false; }
+        var colors = _project.Keyer.ProtectedColors;
+        if (colors.Contains(color, StringComparer.OrdinalIgnoreCase)) { StatusLabel.Text = color + " is already protected."; return false; }
+        if (colors.Length == KeyerSettings.MaxProtectedColors) { StatusLabel.Text = $"You can protect up to {KeyerSettings.MaxProtectedColors} colors."; return false; }
+        Commit(_project with { Keyer = _project.Keyer with { ProtectedColors = [.. colors, color] } });
+        StatusLabel.Text = "Protected " + color;
+        return true;
+    }
+
+    private void OnRemoveProtectedColor(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string color }) return;
+        _settingsTimer?.Stop();
+        if (!CommitControls()) return;
+        var colors = _project.Keyer.ProtectedColors.Where(c => c != color).ToArray();
+        Commit(_project with { Keyer = _project.Keyer with { ProtectedColors = colors } });
+    }
     private void OnAutoSample(object sender, RoutedEventArgs e)
     {
         if (_decoded == null) return;
@@ -471,7 +525,7 @@ public sealed partial class MainWindow : Window
     });
     private void OnClearPlate(object sender, RoutedEventArgs e) => Commit(_project with { Keyer = _project.Keyer with { CleanPlatePath = null } });
 
-    private void OnDrawMask(object sender, RoutedEventArgs e) { EndCropEditing(); StopPlayback(); _draft = []; _editingMask = -1; _picking = false; PickBanner.Visibility = Visibility.Collapsed; MaskHint.Text = "Click at least 3 vertices in the preview, then ✓. Drag vertices to adjust. Esc cancels."; RequestPreview(); DrawOverlay(); }
+    private void OnDrawMask(object sender, RoutedEventArgs e) { EndCropEditing(); StopPlayback(); _draft = []; _editingMask = -1; _pickTarget = PickTarget.None; PickBanner.Visibility = Visibility.Collapsed; MaskHint.Text = "Click at least 3 vertices in the preview, then ✓. Drag vertices to adjust. Esc cancels."; RequestPreview(); DrawOverlay(); }
     private void OnEditMask(object sender, RoutedEventArgs e)
     {
         if (MaskList.SelectedIndex < 0) return; EndCropEditing(); StopPlayback(); _editingMask = MaskList.SelectedIndex; _draft = _project.Masks[_editingMask].At(_position).ToList(); MaskHint.Text = "Drag the vertices, then ✓ to save a keyframe at the current time."; RequestPreview(); DrawOverlay();
@@ -494,29 +548,31 @@ public sealed partial class MainWindow : Window
     private void OnMaskSelection(object sender, object e) { if (!_updating) DrawOverlay(); }
     private Point? ProjectPoint(PointD p)
     {
-        if (_info == null || _gpu == null || _gpu.OutputSize.Width == 0) return null;
+        if (_info == null || CropView is not { } view) return null;
         var crop = VisibleSourceRect;
-        double fit = Math.Min(Viewport.ActualWidth / _gpu.OutputSize.Width, Viewport.ActualHeight / _gpu.OutputSize.Height) * ZoomFactor;
-        double w = _gpu.OutputSize.Width * fit, h = _gpu.OutputSize.Height * fit;
-        return new((Viewport.ActualWidth - w) / 2 + (p.X * _info.Width - crop.X) / crop.Width * w, (Viewport.ActualHeight - h) / 2 + (p.Y * _info.Height - crop.Y) / crop.Height * h);
+        var point = view.Project(new(p.X * _info.Width - crop.X, p.Y * _info.Height - crop.Y));
+        return new(point.X, point.Y);
     }
     private PointD? Unproject(Point point)
     {
-        if (_info == null || _gpu == null || _gpu.OutputSize.Width == 0) return null;
+        if (_info == null || CropView is not { } view || !view.Contains(new(point.X, point.Y))) return null;
         var crop = VisibleSourceRect;
-        double fit = Math.Min(Viewport.ActualWidth / _gpu.OutputSize.Width, Viewport.ActualHeight / _gpu.OutputSize.Height) * ZoomFactor;
-        double w = _gpu.OutputSize.Width * fit, h = _gpu.OutputSize.Height * fit;
-        double x = (point.X - (Viewport.ActualWidth - w) / 2) / w, y = (point.Y - (Viewport.ActualHeight - h) / 2) / h;
-        return x < 0 || y < 0 || x > 1 || y > 1 ? null : new((crop.X + x * crop.Width) / _info.Width, (crop.Y + y * crop.Height) / _info.Height);
+        var p = view.Unproject(new(point.X, point.Y));
+        return new((crop.X + p.X) / _info.Width, (crop.Y + p.Y) / _info.Height);
     }
     private void OnPreviewPointerPressed(object sender, PointerRoutedEventArgs e)
     {
-        if (BeginCropDrag(e)) return;
+        if (_info == null || BeginPan(MaskOverlay, e, !_cropEditing && _pickTarget == PickTarget.None && _draft == null)) return;
+        if (!e.GetCurrentPoint(MaskOverlay).Properties.IsLeftButtonPressed || BeginCropDrag(e)) return;
         var point = e.GetCurrentPoint(MaskOverlay).Position; var normalized = Unproject(point); if (normalized == null) return;
-        if (_picking && _decoded is { } frame)
+        if (_pickTarget != PickTarget.None && _decoded is { } frame)
         {
             int x = Math.Clamp((int)(normalized.Value.X * frame.Width), 0, frame.Width - 1), y = Math.Clamp((int)(normalized.Value.Y * frame.Height), 0, frame.Height - 1); int i = (y * frame.Width + x) * 4;
-            _picking = false; PickBanner.Visibility = Visibility.Collapsed; Commit(_project with { Keyer = _project.Keyer with { ScreenColor = $"#{frame.Pixels[i]:X2}{frame.Pixels[i + 1]:X2}{frame.Pixels[i + 2]:X2}" } }); e.Handled = true; return;
+            var target = _pickTarget; _pickTarget = PickTarget.None; PickBanner.Visibility = Visibility.Collapsed;
+            var color = $"#{frame.Pixels[i]:X2}{frame.Pixels[i + 1]:X2}{frame.Pixels[i + 2]:X2}";
+            if (target == PickTarget.Screen) Commit(_project with { Keyer = _project.Keyer with { ScreenColor = color } });
+            else if (!AddProtectedColor(color)) RequestPreview();
+            e.Handled = true; return;
         }
         if (_draft == null) return;
         for (int i = 0; i < _draft.Count; i++) if (ProjectPoint(_draft[i]) is { } projected && Math.Pow(projected.X - point.X, 2) + Math.Pow(projected.Y - point.Y, 2) < 144) { _dragVertex = i; MaskOverlay.CapturePointer(e.Pointer); e.Handled = true; return; }
@@ -524,10 +580,16 @@ public sealed partial class MainWindow : Window
     }
     private void OnPreviewPointerMoved(object sender, PointerRoutedEventArgs e)
     {
+        if (_panPointer == e.Pointer.PointerId) { OnPanMoved(sender, e); return; }
         if (_cropEditing) { UpdateCropDrag(e); return; }
         if (_draft != null && _dragVertex >= 0 && Unproject(e.GetCurrentPoint(MaskOverlay).Position) is { } normalized) { _draft[_dragVertex] = normalized; DrawOverlay(); e.Handled = true; }
     }
-    private void OnPreviewPointerReleased(object sender, PointerRoutedEventArgs e) { if (_cropPointerId == e.Pointer.PointerId) { UpdateCropDrag(e); FinishCropDrag(); e.Handled = true; } _dragVertex = -1; MaskOverlay.ReleasePointerCapture(e.Pointer); }
+    private void OnPreviewPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        if (_panPointer == e.Pointer.PointerId) { OnPanReleased(sender, e); return; }
+        if (_cropPointerId == e.Pointer.PointerId) { UpdateCropDrag(e); FinishCropDrag(); e.Handled = true; }
+        _dragVertex = -1; MaskOverlay.ReleasePointerCapture(e.Pointer);
+    }
     private void DrawOverlay()
     {
         if (MaskOverlay == null || _info == null) return; MaskOverlay.Children.Clear(); KeyframeMarkers.Children.Clear();
@@ -559,7 +621,6 @@ public sealed partial class MainWindow : Window
         while (Directory.Exists(path) || File.Exists(path)) path = System.IO.Path.Combine(folder.Path, name + "_" + suffix++);
         await RunExportAsync(ExportKind.Atlas, path);
     });
-    private enum ExportKind { Atlas, Delta, Webm, PackedMp4 }
 
     private async void OnExportWebm(object sender, RoutedEventArgs e) => await Guard(() => PickVideoExportAsync(ExportKind.Webm));
     private async void OnExportPackedMp4(object sender, RoutedEventArgs e) => await Guard(() => PickVideoExportAsync(ExportKind.PackedMp4));
@@ -623,7 +684,7 @@ public sealed partial class MainWindow : Window
         if (_atlas == null && !CommitControls()) return;
         EndCropEditing();
         _originalEditor ??= new(_project, _history, _info, _atlas, _position, _projectPath, ShowSource.IsChecked == true,
-            PreviewResolution.SelectedIndex, ZoomChoice.SelectedIndex, MaskList.SelectedIndex, _draft?.ToList(), _editingMask);
+            PreviewResolution.SelectedIndex, _editorCamera, MaskList.SelectedIndex, _draft?.ToList(), _editingMask);
         try { await LoadPathAsync(_lastExport, exportPreview: true); }
         catch
         {
@@ -640,7 +701,7 @@ public sealed partial class MainWindow : Window
         _project = original.Project; _history = original.History; _info = original.Info; _atlas = original.Atlas;
         _position = original.Position; _projectPath = original.ProjectPath; _showingExport = false;
         _updating = true;
-        try { ShowSource.IsChecked = original.SourceView; PreviewResolution.SelectedIndex = original.Resolution; ZoomChoice.SelectedIndex = original.Zoom; }
+        try { ShowSource.IsChecked = original.SourceView; PreviewResolution.SelectedIndex = original.Resolution; SetCamera(false, original.Camera); }
         finally { _updating = false; }
         UpdateMediaUi(); SyncControls();
         MaskList.SelectedIndex = original.SelectedMask; _draft = original.Draft?.ToList(); _editingMask = original.EditingMask;
@@ -655,7 +716,7 @@ public sealed partial class MainWindow : Window
         if (e.Key == VirtualKey.Escape && _cropEditing) { if (_cropDragStart != null) FinishCropDrag(cancel: true); else OnFinishCrop(sender, new()); e.Handled = true; return; }
         if (e.Key == VirtualKey.Enter && _cropEditing && e.OriginalSource is not TextBox) { OnFinishCrop(sender, new()); e.Handled = true; return; }
         if (e.Key == VirtualKey.Escape && _showingExport) { _ = Guard(ReturnToOriginalAsync); e.Handled = true; return; }
-        if (e.Key == VirtualKey.Escape) { _draft = null; _editingMask = -1; _picking = false; PickBanner.Visibility = Visibility.Collapsed; DrawOverlay(); RequestPreview(); e.Handled = true; return; }
+        if (e.Key == VirtualKey.Escape) { _draft = null; _editingMask = -1; _pickTarget = PickTarget.None; PickBanner.Visibility = Visibility.Collapsed; DrawOverlay(); RequestPreview(); e.Handled = true; return; }
         if (e.OriginalSource is TextBox || _info == null || _exportCts != null) return;
         bool ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
         if (ctrl && e.Key == VirtualKey.Z) OnUndo(sender, new()); else if (ctrl && e.Key == VirtualKey.Y) OnRedo(sender, new());
@@ -663,7 +724,9 @@ public sealed partial class MainWindow : Window
     }
     private void OnClosed(object sender, WindowEventArgs e)
     {
-        _closed = true; StopPlayback(); _settingsTimer?.Stop(); _sourceCts.Cancel(); _previewCts?.Cancel(); _exportCts?.Cancel();
+        _closed = true; StopPlayback();
+        if (_settingsTimer?.IsRunning == true) { _settingsTimer.Stop(); CommitControls(); }
+        _sourceCts.Cancel(); _previewCts?.Cancel(); _exportCts?.Cancel();
         if (_gpu != null) { using var panel = new ISwapChainPanelNative(PreviewSurface); panel.SetSwapChain(null); _gpu.Dispose(); }
         _cache.Clear();
         ClosePlayer();

@@ -15,6 +15,18 @@ public sealed class PreviewBackgroundTests
     private static byte[] Pixel(RgbaFrame image, int x, int y) => image.Pixels[((y * image.Width + x) * 4)..((y * image.Width + x) * 4 + 4)];
 
     [Fact]
+    public void PanTranslatesPreviewPixelsWithoutChangingRenderedOutput()
+    {
+        using var gpu = new GpuFrameProcessor();
+        var subject = Solid(4, 4, 255, 32, 0, 255);
+        gpu.Render(subject, new() { Enabled = false }, [], 0, new(0, 0, 4, 4), new(4, 4));
+        var centered = gpu.ReadPreview(new(8, 8), PreviewBackground.Black, zoom: .5f);
+        var moved = gpu.ReadPreview(new(8, 8), PreviewBackground.Black, zoom: .5f, pan: new(2, -1));
+        Assert.Equal(Pixel(centered, 0, 0), Pixel(moved, 3, 3));
+        Assert.Equal(Pixel(centered, 2, 2), Pixel(moved, 4, 1));
+        Assert.Equal(subject.Pixels, gpu.Readback().Pixels);
+    }
+    [Fact]
     public void PhotoCompositionUsesAlphaAndDoesNotChangeTransparentExport()
     {
         using var gpu = new GpuFrameProcessor();

@@ -45,7 +45,7 @@ public sealed class CropGeometryTests
     [InlineData(800, 700, 3.2)]
     public void HandlesAndCoordinatesUseOriginal4KCanvasAtProxyResolutionAndZoom(double width, double height, double zoom)
     {
-        var view = CropViewport.Fit(new(3840, 2160), new(910, 512), width, height, zoom);
+        var view = CropViewport.Fit(new(3840, 2160), new(910, 512), width, height, zoom, new(45, -72));
         var crop = new RectI(400, 500, 2000, 1000);
         foreach (var (handle, point) in CropGeometry.Handles(crop))
         {
@@ -57,6 +57,21 @@ public sealed class CropGeometryTests
         Assert.Equal(CropHandle.Move, CropGeometry.HitTest(crop, view, view.Project(new(1400, 1000))));
         Assert.Equal(CropHandle.None, CropGeometry.HitTest(crop, view, view.Project(new(50, 50))));
         Assert.False(view.Contains(new(view.Left - 1, view.Top)));
+    }
+    [Fact]
+    public void WheelZoomKeepsTheSourcePointUnderTheCursorAfterPanning()
+    {
+        var source = new SizeI(1600, 900);
+        var pointer = new PointD(550, 210);
+        const double fit = .5;
+        var camera = new PreviewCamera(null, new(70, -40));
+        CropViewport View(PreviewCamera c) => CropViewport.Fit(source, source, 800, 600, (c.Scale ?? fit) / fit, c.Pan);
+        var anchor = View(camera).Unproject(pointer);
+        var zoomed = camera.ZoomAt(pointer, new(400, 300), fit, 240);
+        Assert.True(zoomed.Scale > fit);
+        var projected = View(zoomed).Project(anchor);
+        Assert.Equal(pointer.X, projected.X, 8);
+        Assert.Equal(pointer.Y, projected.Y, 8);
     }
     [Fact]
     public void VisualSelectionUsesTheSameSourcePixelsAsGpuCropAndProjectHistory()

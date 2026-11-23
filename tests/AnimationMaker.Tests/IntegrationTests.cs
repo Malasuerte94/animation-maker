@@ -60,6 +60,36 @@ public sealed class IntegrationTests
         Assert.Equal(FrameGeometry.FrameCount(0, info.Duration, 24), count);
     }
     [Fact]
+    public async Task NewClipsRestorePreferencesAndSavedProjectsKeepTheirExplicitSettings()
+    {
+        var folder = Folder();
+        var path = Path.Combine(folder, "preferences.json");
+        var source = Path.Combine(folder, "clip.mp4");
+        await File.WriteAllTextAsync(source, "fixture");
+        var info = new VideoInfo(1920, 1080, 1, 30, false, false);
+        var defaults = EditorPreferences.Load(path);
+        Assert.True(defaults.FullResolution);
+        Assert.Equal(1024, defaults.NewClip(source, info).Export.MaxFrameHeight);
+        var changed = defaults with { FullResolution = false, MaxFrameHeight = 720, ExportFormat = ExportKind.PackedMp4,
+            ProtectedColors = ["#668822", "#225522"], ProtectTolerance = 23 };
+        changed.Save(path);
+        var restored = EditorPreferences.Load(path);
+        var clip = restored.NewClip(source, info);
+        Assert.False(restored.FullResolution);
+        Assert.Equal(ExportKind.PackedMp4, restored.ExportFormat);
+        Assert.Equal(720, clip.Export.MaxFrameHeight);
+        Assert.Equal(VideoQuality.Balanced, clip.Export.VideoQuality);
+        Assert.Equal(changed.ProtectedColors, clip.Keyer.ProtectedColors);
+        Assert.Equal(23, clip.Keyer.ProtectTolerance);
+        var projectPath = Path.Combine(folder, "clip.animproj");
+        await ProjectStore.SaveAsync(projectPath, clip with { Export = clip.Export with { MaxFrameHeight = 512, VideoQuality = VideoQuality.High } });
+        var project = await ProjectStore.LoadAsync(projectPath);
+        Assert.Equal(512, project.Export.MaxFrameHeight);
+        Assert.Equal(VideoQuality.High, project.Export.VideoQuality);
+        Assert.Equal(changed.ProtectedColors, project.Keyer.ProtectedColors);
+        Assert.Equal(23, project.Keyer.ProtectTolerance);
+    }
+    [Fact]
     public async Task ProjectRoundtripRetainsRelativeMediaAndMaskKeyframes()
     {
         string folder = Folder(); string source = Path.Combine(folder, "source.mp4"); await File.WriteAllTextAsync(source, "fixture");

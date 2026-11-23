@@ -1,30 +1,18 @@
-# Animation Maker 0.1.0-beta.3
-
-Export a single H.264 MP4 with the animation on the left and its grayscale alpha mask on the right.
+# Animation Maker 0.1.0-beta.4
 
 ## Changes
 
-- **Export MP4 · RGB + Alpha** uses the editor's final matte, crop, trim and frame rate. Choose High, Balanced or Small quality, with optional AAC audio.
-- The desktop Player reconstructs transparency automatically for Animation Maker MP4 exports. Use **Interpret as RGB + Alpha** to preview external videos that use the same layout.
-- Chroma keying supports magenta and other solid screen colors through the same eyedropper and matte preview.
-- A PixiJS 8 WebGL shader and demo are included in the Windows packages under `delta-runtime/`. The [demo guide](https://github.com/Malasuerte94/animation-maker/blob/v0.1.0-beta.3/runtime/pixi-delta/README.md#mp4-rgb--alpha-demo) explains how to run it and integrate the shader.
-
-## Playback
-
-Standard video players show both halves. Animation Maker's Player or the PixiJS shader combines them for transparent playback. WebM remains available for delivery as VP9 with native alpha.
-
-## Validation
-
-89 .NET tests and 20 headless Chrome and Edge tests cover packed MP4 export, partial alpha, odd canvas dimensions, trim, audio, cancellation and PixiJS playback, alongside existing WebM and Delta tests. Mobile browser testing is pending.
+- Scroll over the Editor or Player preview to zoom around the pointer. Drag to pan, or choose **Fit** to recenter. Middle-drag pans while you edit a crop or mask.
+- **Protected colors** keeps foreground shades during chroma keying. Sample colors from the source or enter up to 16 hex colors. Set the tolerance to zero for exact matches or increase it to include nearby shades.
+- The editor starts at **Full resolution** with a **1024 px** maximum export frame height. It remembers your preview resolution, height limit, protected colors, tolerance and export format between sessions.
+- Choose a format from the **Export format** dropdown to see its controls and export button. New clips start with **Balanced** video quality. Saved projects retain their chosen quality.
 
 ## Downloads
 
-- `AnimationMaker-0.1.0-beta.3-win-x64-setup.exe` for a per-user installation.
-- `AnimationMaker-0.1.0-beta.3-win-x64-portable.zip` for a standalone folder. Extract all files and run `AnimationMaker.exe`.
-- `AnimationMaker-PixiJS-Delta-0.1.0-beta.3.zip` for the reusable Delta runtime and TypeScript types.
-- `FFmpeg-9.0.2-source.tar.gz` for the upstream source matching the bundled FFmpeg revision.
-- `SHA256SUMS.txt` to verify the downloads.
+- `AnimationMaker-0.1.0-beta.4-win-x64-setup.exe` installs the app or updates an existing installation.
+- `AnimationMaker-0.1.0-beta.4-win-x64-portable.zip` contains the standalone Windows app. Extract the folder and run `AnimationMaker.exe`.
+- `AnimationMaker-PixiJS-Delta-0.1.0-beta.4.zip` contains the reusable PixiJS Delta runtime and TypeScript types.
+- `FFmpeg-9.0.2-source.tar.gz` contains the source for the bundled FFmpeg revision.
+- `SHA256SUMS.txt` contains checksums for the downloads.
 
-The Windows packages include .NET, WinUI and FFmpeg. This beta is unsigned and requires Windows x64 and Direct3D 11. Processing is local.
-
-The app and PixiJS code use the MIT license. Dependencies retain their own licenses, including GPLv3 for the separate FFmpeg executables.
+The Windows packages are unsigned and require Windows x64 and Direct3D 11. Video processing runs locally.

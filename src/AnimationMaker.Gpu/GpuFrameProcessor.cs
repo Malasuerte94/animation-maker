@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using AnimationMaker.Core;
 using Vortice.D3DCompiler;
@@ -36,8 +37,11 @@ public sealed class GpuFrameProcessor : IFrameProcessor, IDeltaAnalyzerProvider,
     [StructLayout(LayoutKind.Sequential)]
     private struct ShaderConstants
     {
-        public Vector4 Screen, Key, Matte, Edge, Sizes, Crop, Preview, Backdrop;
+        public Vector4 Screen, Key, Matte, Edge, Sizes, Crop, Preview, Backdrop, Pan, Protection;
+        public ColorPalette ProtectedColors;
     }
+    [InlineArray(KeyerSettings.MaxProtectedColors)]
+    private struct ColorPalette { private Vector4 _first; }
     private sealed class Surface : IDisposable
     {
         public ID3D11Texture2D Texture { get; }
@@ -128,14 +132,22 @@ public sealed class GpuFrameProcessor : IFrameProcessor, IDeltaAnalyzerProvider,
                 _plateKey = plateKey;
             }
             var screen = ColorMath.ParseHex(keyer.ScreenColor);
+            if (keyer.ProtectedColors.Length > KeyerSettings.MaxProtectedColors)
+                throw new ArgumentOutOfRangeException(nameof(keyer.ProtectedColors));
             _settings = new()
             {
                 Screen = new(screen.R, screen.G, screen.B, 1),
+                Protection = new(keyer.ProtectedColors.Length, keyer.ProtectTolerance, 0, 0),
                 Key = new(keyer.Mode == KeyerMode.Fast ? 1 : 0, keyer.Similarity, keyer.Softness, keyer.Despill),
                 Matte = new(keyer.ClipBlack, keyer.ClipWhite, keyer.RedWeight, keyer.BlueWeight),
                 Edge = new(keyer.Choke, keyer.Feather, keyer.Enabled ? 1 : 0, keyer.CleanPlatePath is { Length: > 0 } ? 1 : 0),
                 Sizes = new(source.Width, source.Height, output.Width, output.Height), Crop = new(crop.X, crop.Y, crop.Width, crop.Height), Preview = _settings.Preview
             };
+            for (int i = 0; i < keyer.ProtectedColors.Length; i++)
+            {
+                var color = ColorMath.ParseHex(keyer.ProtectedColors[i]);
+                _settings.ProtectedColors[i] = new(color.R, color.G, color.B, 0);
+            }
             var keyed = Ensure(ref _keyed, source.Width, source.Height);
             Draw("KeyPS", keyed.Rtv!, keyed.Width, keyed.Height, input.Srv, mask.Srv, plate.Srv);
             var refined = Ensure(ref _refined, source.Width, source.Height);
@@ -188,21 +200,22 @@ public sealed class GpuFrameProcessor : IFrameProcessor, IDeltaAnalyzerProvider,
             _background?.Dispose(); _background = replacement;
         }
     }
-    private void DrawPreview(ID3D11RenderTargetView target, int width, int height, PreviewBackground background, float zoom, BackgroundImageFit imageFit)
+    private void DrawPreview(ID3D11RenderTargetView target, int width, int height, PreviewBackground background, float zoom, BackgroundImageFit imageFit, PointD pan)
     {
+        _settings.Pan = new((float)pan.X, (float)pan.Y, 0, 0);
         _settings.Preview = new((float)background, Math.Clamp(zoom, .00001f, 65536), width, height);
         _settings.Backdrop = new(_background?.Width ?? 1, _background?.Height ?? 1, (float)imageFit, _background != null ? 1 : 0);
         Draw("PreviewPS", target, width, height, _output!.Srv, null!, null!, _background?.Srv!);
     }
     // Read the same GPU composition used by the window without changing the transparent export surface.
-    public RgbaFrame ReadPreview(SizeI viewport, PreviewBackground background, float zoom = 1, BackgroundImageFit imageFit = BackgroundImageFit.Fill)
+    public RgbaFrame ReadPreview(SizeI viewport, PreviewBackground background, float zoom = 1, BackgroundImageFit imageFit = BackgroundImageFit.Fill, PointD pan = default)
     {
         lock (_sync)
         {
             if (_output == null) throw new InvalidOperationException("No frame has been rendered.");
             if (viewport.Width is < 1 or > 16384 || viewport.Height is < 1 or > 16384) throw new ArgumentOutOfRangeException(nameof(viewport));
             using var target = new Surface(_device, viewport.Width, viewport.Height, Format.R8G8B8A8_UNorm, true);
-            DrawPreview(target.Rtv!, viewport.Width, viewport.Height, background, zoom, imageFit);
+            DrawPreview(target.Rtv!, viewport.Width, viewport.Height, background, zoom, imageFit, pan);
             using var staging = _device.CreateTexture2D(new Texture2DDescription(Format.R8G8B8A8_UNorm, (uint)viewport.Width, (uint)viewport.Height, 1, 1, BindFlags.None, ResourceUsage.Staging, CpuAccessFlags.Read));
             _context.CopyResource(staging, target.Texture);
             return ReadPixels(staging, viewport.Width, viewport.Height);
@@ -220,7 +233,7 @@ public sealed class GpuFrameProcessor : IFrameProcessor, IDeltaAnalyzerProvider,
             return _swapChain.NativePointer;
         }
     }
-    public void Present(int width, int height, PreviewBackground background, float zoom = 1, BackgroundImageFit imageFit = BackgroundImageFit.Fill)
+    public void Present(int width, int height, PreviewBackground background, float zoom = 1, BackgroundImageFit imageFit = BackgroundImageFit.Fill, PointD pan = default)
     {
         lock (_sync)
         {
@@ -234,7 +247,7 @@ public sealed class GpuFrameProcessor : IFrameProcessor, IDeltaAnalyzerProvider,
             }
             if (_output != null)
             {
-                DrawPreview(_backBuffer, width, height, background, zoom, imageFit);
+                DrawPreview(_backBuffer, width, height, background, zoom, imageFit, pan);
             }
             else _context.ClearRenderTargetView(_backBuffer, new Vortice.Mathematics.Color4(.047f, .055f, .071f, 1));
             _swapChain.Present(1, PresentFlags.None).CheckError();
